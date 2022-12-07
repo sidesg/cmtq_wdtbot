@@ -1,0 +1,6 @@
+**/.vscode
+*.code-workspace
+**/__pycache__
+*.csv
+*.xlsx
+*.tsv

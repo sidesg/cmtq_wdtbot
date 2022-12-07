@@ -1,0 +1,5 @@
+apicache-py3
+*.txt
+user-password.py
+throttle.ctrl
+pywikibot.lwp
