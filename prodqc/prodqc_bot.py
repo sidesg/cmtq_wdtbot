@@ -51,7 +51,7 @@ def main():
 
 def chargerctv():
     #Charger les oeuvres produites au QC à partir d'export(s) CinéTV
-    file_list = [f for f in QCPRODS.glob('**/*') if f.is_file()]
+    file_list = [f for f in QCPRODS.iterdir() if f.suffix == ".tsv"] 
 
     outdf = pd.DataFrame()
 
@@ -92,14 +92,15 @@ def creerrepo(): #Connecter à Wikidata
     return repo
 
 def ajout_qualification(decl, repo):
-    qualifier = pywikibot.Claim(repo, 'P131')
+    qualifier = pywikibot.Claim(repo, u'P131')
     target = pywikibot.ItemPage(repo, "Q176")
     qualifier.setTarget(target)
 
     decl.addQualifier(qualifier, bot=True)
+    ajout_source(decl)
 
 def ajout_declaration(itm, repo):
-    claim = pywikibot.Claim(repo, 'P495')
+    claim = pywikibot.Claim(repo, u'P495')
     target = pywikibot.ItemPage(repo, 'Q16')
     claim.setTarget(target)
 
@@ -107,6 +108,11 @@ def ajout_declaration(itm, repo):
     
     itm.addClaim(claim, bot=True)
 
+def ajout_source(decl, repo):
+    ref = pywikibot.Claim(repo, u'P248')
+    ref.setTarget(pywikibot.ItemPage(repo, 'Q41001657'))
+
+    decl.addSource(ref, bot=True)
 
 def ajoutdeclarations(mapping, repo):
     err_quids = []
@@ -125,13 +131,20 @@ def ajoutdeclarations(mapping, repo):
             item_dict = item.get()  # Get the item dictionary
             clm_dict = item_dict["claims"]  # Get the claim dictionary
 
-            if "P495" in clm_dict:
+            if "P495" in clm_dict: #Si l'URI a "pays d'origine" parmi ses déclarations
                 pays_cibles = [claim.getTarget().concept_uri() for claim in item.claims['P495']]
                 if CANADAURI in pays_cibles:
                     for claim in item.claims['P495']: 
-                        if claim.getTarget().concept_uri() == CANADAURI and 'P131' not in claim.qualifiers:
-                            ajout_qualification(claim, repo)
-                            changed = True
+                        if claim.getTarget().concept_uri() == CANADAURI:# and 'P131' not in claim.qualifiers:
+                            if 'P131' not in claim.qualifiers: #Si la déclaration n'a pas de qualification "localisation administrative"
+                                ajout_qualification(claim, repo)
+                                changed = True
+                            else:
+                                try:
+                                    ajout_source(claim, repo)
+                                    changed = True
+                                except:
+                                    continue                                                       
                 else:
                     ajout_declaration(item, repo)
                     changed = True
@@ -141,7 +154,7 @@ def ajoutdeclarations(mapping, repo):
                 changed = True
     
         except:
-            print(f"Qid {qid} inexistant")
+            print(f"Erreur, qid {qid}")
     
         if changed == False:
             err_quids.append(qid)
