@@ -7,11 +7,15 @@ ayant été produites au Québec.
 import re
 import time
 from pathlib import Path
-
+import argparse
 import pandas as pd
 import pywikibot
 
 timestr = time.strftime("%Y%m%d-%H%M%S")
+
+parser = argparse.ArgumentParser()
+parser.add_argument("-l", "--limite", help="nombre maximum d'URIs Wikidata à modifier", type=int)
+args = parser.parse_args()
 
 QCPRODS = Path.cwd() / "cinetv_prodqc"
 FIMLOCOLS = [
@@ -20,60 +24,83 @@ FIMLOCOLS = [
 ]
 CANADAURI = "http://www.wikidata.org/entity/Q16"
 
-#Charger les oeuvres produites au QC à partir d'export(s) CinéTV
-file_list = [f for f in QCPRODS.glob('**/*') if f.is_file()]
+def main():
+    qcproddf = chargerctv()
+    qcproddf = nettoyerctv(qcproddf)
 
-qcproddf = pd.DataFrame()
+    wdt_cmtqId = chargerwdturi()
 
-#TODO: make flexible to accomodate csv and xlsx
-for file_path in file_list:
-    indf = pd.read_csv(
-        file_path,
-        usecols=FIMLOCOLS,
-        sep="\t",
-        encoding="cp1252"
-    )
+    qcprodWdt = pd.merge(wdt_cmtqId, qcproddf, on="FilmoId")
+
+    print(f'{len(qcprodWdt)} oeuvres à modifier sur Wikidata.')
     
-    qcproddf = pd.concat([qcproddf, indf])
+    if args.limite:
+        qcprodWdt = qcprodWdt.head(args.limite) #Limiter le nombre d'URIs à modifier
 
-qcproddf = qcproddf.drop_duplicates()
-qcproddf.rename(columns={'Numéro séquentiel': "FilmoId"}, inplace=True)
-qcproddf = qcproddf[qcproddf["FilmoId"].notnull()]
-qcproddf = qcproddf[qcproddf["FilmoId"].str.isnumeric()]
-qcproddf = qcproddf.astype({"FilmoId": "int64"})
+    start = input(f"Ce script modifiera {len(qcprodWdt)} notices sur Wikidata. Continuer? [o]ui/[N]on? ")
 
-#Charger le mapping FilmoID-WdtURI
-wdt_cmtqId = pd.read_csv("../wdt_cmtqId.csv")
-wdt_cmtqId = wdt_cmtqId[wdt_cmtqId["FilmoId"].str.isnumeric()]
-wdt_cmtqId = wdt_cmtqId.astype({"FilmoId": "int64"})
+    if not start.lower().startswith("o"):
+        exit()
 
-qcprodWdt = pd.merge(wdt_cmtqId, qcproddf, on="FilmoId")
+    qcprodWdt["LienWikidata"] = qcprodWdt["LienWikidata"].apply(lambda x: re.search(r"Q.+$", x).group().strip())
 
-print(f'{len(qcprodWdt)} oeuvres à modifier sur Wikidata.')
+    repo = creerrepo()
 
-start = input("Ce script pourrait effectuer des modifications à grande échelle. Continuer? [o]ui/[N]on? ")
-
-if not start.lower().startswith("o"):
-  exit()
+    ajoutdeclarations(qcprodWdt, repo)
 
 
-qcprodWdt = qcprodWdt.head(100)
-qcprodWdt["LienWikidata"] = qcprodWdt["LienWikidata"].apply(lambda x: re.search(r"Q.+$", x).group().strip())
+def chargerctv():
+    #Charger les oeuvres produites au QC à partir d'export(s) CinéTV
+    file_list = [f for f in QCPRODS.iterdir() if f.suffix == ".tsv"] 
 
-#Connecter à Wikidata
-site = pywikibot.Site("wikidata", "wikidata")
-repo = site.data_repository()
+    outdf = pd.DataFrame()
 
+    #TODO: make flexible to accomodate csv and xlsx
+    for file_path in file_list:
+        indf = pd.read_csv(
+            file_path,
+            usecols=FIMLOCOLS,
+            sep="\t",
+            encoding="cp1252"
+        )
+    
+        outdf = pd.concat([outdf, indf])
 
-def ajout_qualification(decl, repo=repo):
-        qualifier = pywikibot.Claim(repo, 'P131')
-        target = pywikibot.ItemPage(repo, "Q176")
-        qualifier.setTarget(target)
+    return outdf
 
-        decl.addQualifier(qualifier, bot=True)
+def nettoyerctv(df):
+    df = df.drop_duplicates()
+    df = df.rename(columns={'Numéro séquentiel': "FilmoId"})
+    df = df[df["FilmoId"].notnull()]
+    df = df[df["FilmoId"].str.isnumeric()]
+    df = df.astype({"FilmoId": "int64"})
 
-def ajout_declaration(itm, repo=repo):
-    claim = pywikibot.Claim(repo, 'P495')
+    return df
+
+def chargerwdturi():
+    #Charger le mapping FilmoID-WdtURI
+    outdf = pd.read_csv("../wdt_cmtqId.csv")
+    outdf = outdf[outdf["FilmoId"].str.isnumeric()]
+    outdf = outdf.astype({"FilmoId": "int64"})
+
+    return outdf
+
+def creerrepo(): #Connecter à Wikidata
+    site = pywikibot.Site("wikidata", "wikidata")
+    repo = site.data_repository()
+
+    return repo
+
+def ajout_qualification(decl, repo):
+    qualifier = pywikibot.Claim(repo, u'P131')
+    target = pywikibot.ItemPage(repo, "Q176")
+    qualifier.setTarget(target)
+
+    decl.addQualifier(qualifier, bot=True)
+    ajout_source(decl)
+
+def ajout_declaration(itm, repo):
+    claim = pywikibot.Claim(repo, u'P495')
     target = pywikibot.ItemPage(repo, 'Q16')
     claim.setTarget(target)
 
@@ -81,58 +108,75 @@ def ajout_declaration(itm, repo=repo):
     
     itm.addClaim(claim, bot=True)
 
+def ajout_source(decl, repo):
+    ref = pywikibot.Claim(repo, u'P248')
+    ref.setTarget(pywikibot.ItemPage(repo, 'Q41001657'))
 
-err_quids = []
-modif_qids = []
+    decl.addSource(ref, bot=True)
 
-rapportdf = pd.DataFrame()
+def ajoutdeclarations(mapping, repo):
+    err_quids = []
+    modif_qids = []
 
-for idx, row in qcprodWdt.iterrows():
-    changed = False
-    qid = row["LienWikidata"]
-    filmoid = row["FilmoId"]
+    rapportdf = pd.DataFrame()
 
-    try:
-        item = pywikibot.ItemPage(repo, qid)
+    for idx, row in mapping.iterrows():
+        changed = False
+        qid = row["LienWikidata"]
+        filmoid = row["FilmoId"]
 
-        item_dict = item.get()  # Get the item dictionary
-        clm_dict = item_dict["claims"]  # Get the claim dictionary
+        try:
+            item = pywikibot.ItemPage(repo, qid)
 
-        if "P495" in clm_dict:
-            pays_cibles = [claim.getTarget().concept_uri() for claim in item.claims['P495']]
-            if CANADAURI in pays_cibles:
-                for claim in item.claims['P495']: 
-                    if claim.getTarget().concept_uri() == CANADAURI and 'P131' not in claim.qualifiers:
-                        ajout_qualification(claim)
-                        changed = True
+            item_dict = item.get()  # Get the item dictionary
+            clm_dict = item_dict["claims"]  # Get the claim dictionary
+
+            if "P495" in clm_dict: #Si l'URI a "pays d'origine" parmi ses déclarations
+                pays_cibles = [claim.getTarget().concept_uri() for claim in item.claims['P495']]
+                if CANADAURI in pays_cibles:
+                    for claim in item.claims['P495']: 
+                        if claim.getTarget().concept_uri() == CANADAURI:# and 'P131' not in claim.qualifiers:
+                            if 'P131' not in claim.qualifiers: #Si la déclaration n'a pas de qualification "localisation administrative"
+                                ajout_qualification(claim, repo)
+                                changed = True
+                            else:
+                                try:
+                                    ajout_source(claim, repo)
+                                    changed = True
+                                except:
+                                    continue                                                       
+                else:
+                    ajout_declaration(item, repo)
+                    changed = True
+
             else:
-                ajout_declaration(item)
+                ajout_declaration(item, repo)
                 changed = True
-
-        else:
-            ajout_declaration(item)
-            changed = True
     
-    except:
-        print(f"Qid {qid} inexistant")
+        except:
+            print(f"Erreur, qid {qid}")
     
-    if changed == False:
-        err_quids.append(qid)
-        outdf = pd.DataFrame(data=[{
-            "qid": qid,
-            "filmoid": filmoid,
-            "statut": "non modifié"
-        }])
-    elif changed == True:
-        modif_qids.append(qid)
-        outdf = pd.DataFrame(data=[{
-            "qid": qid,
-            "filmoid": filmoid,
-            "statut": "modifié"
-        }])
-    rapportdf = pd.concat([rapportdf, outdf])
+        if changed == False:
+            err_quids.append(qid)
+            outdf = pd.DataFrame(data=[{
+                "qid": qid,
+                "filmoid": filmoid,
+                "statut": "non modifié"
+            }])
+        elif changed == True:
+            modif_qids.append(qid)
+            outdf = pd.DataFrame(data=[{
+                "qid": qid,
+                "filmoid": filmoid,
+                "statut": "modifié"
+            }])
+        rapportdf = pd.concat([rapportdf, outdf])
 
-print(f"""{len(modif_qids)} oeuvres modifiées.
-Qids non modifiés : {err_quids}""")
+    print(f"""{len(modif_qids)} oeuvres modifiées.
+    Qids non modifiés : {', '.join(err_quids)}""")
 
-rapportdf.to_excel(f"rapports/prodqc_rapport-{timestr}.xlsx", index=False)
+    rapportdf.to_excel(f"rapports/prodqc_rapport-{timestr}.xlsx", index=False)
+
+
+if __name__ == "__main__":
+    main()
