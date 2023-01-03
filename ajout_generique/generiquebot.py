@@ -1,3 +1,9 @@
+#!/usr/local/bin/python3
+
+"""
+Ajouter des déclarations à des oeuvres cinématographiques sur Wikidata.
+"""
+
 import time
 from pathlib import Path
 import argparse
@@ -12,6 +18,7 @@ args = parser.parse_args()
 RAPPORTCHEMIN = Path.cwd() / "rapports"
 
 CTVCHEMIN = Path.cwd() / "donnees" / "genre_qc.csv"
+
 GENDICT = {
     28: "P162", #Producteur = producteur ou productrice
     # 29: "P162", #Producteur délégué = producteur ou productrice

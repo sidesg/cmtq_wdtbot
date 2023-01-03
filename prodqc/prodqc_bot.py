@@ -1,3 +1,5 @@
+#!/usr/local/bin/python3
+
 """
 Ce bot associe des oeuvres cinématographiques au Québec en tant que lieu de création.
 Le bot dépend d'un export de CinéTV, QCPRODS, qui contient des oeuvres identifées comme
@@ -49,7 +51,7 @@ def main():
     ajoutdeclarations(qcprodWdt, repo)
 
 
-def chargerctv():
+def chargerctv() -> pd.DataFrame:
     #Charger les oeuvres produites au QC à partir d'export(s) CinéTV
     file_list = [f for f in QCPRODS.iterdir() if f.suffix == ".tsv"] 
 
@@ -68,7 +70,7 @@ def chargerctv():
 
     return outdf
 
-def nettoyerctv(df):
+def nettoyerctv(df: pd.DataFrame) -> pd.DataFrame:
     df = df.drop_duplicates()
     df = df.rename(columns={'Numéro séquentiel': "FilmoId"})
     df = df[df["FilmoId"].notnull()]
@@ -77,7 +79,7 @@ def nettoyerctv(df):
 
     return df
 
-def chargerwdturi():
+def chargerwdturi() -> pd.DataFrame:
     #Charger le mapping FilmoID-WdtURI
     outdf = pd.read_csv("../wdt_cmtqId.csv")
     outdf = outdf[outdf["FilmoId"].str.isnumeric()]
@@ -85,13 +87,13 @@ def chargerwdturi():
 
     return outdf
 
-def creerrepo(): #Connecter à Wikidata
+def creerrepo() -> pywikibot.DataSite: #Connecter à Wikidata
     site = pywikibot.Site("wikidata", "wikidata")
     repo = site.data_repository()
 
     return repo
 
-def ajout_qualification(decl, repo):
+def ajout_qualification(decl: pywikibot.Claim, repo: pywikibot.DataSite) -> None:
     qualifier = pywikibot.Claim(repo, u'P131')
     target = pywikibot.ItemPage(repo, "Q176")
     qualifier.setTarget(target)
@@ -99,7 +101,7 @@ def ajout_qualification(decl, repo):
     decl.addQualifier(qualifier, bot=True)
     ajout_source(decl)
 
-def ajout_declaration(itm, repo):
+def ajout_declaration(itm: pywikibot.ItemPage, repo: pywikibot.DataSite) -> None:
     claim = pywikibot.Claim(repo, u'P495')
     target = pywikibot.ItemPage(repo, 'Q16')
     claim.setTarget(target)
@@ -108,13 +110,13 @@ def ajout_declaration(itm, repo):
     
     itm.addClaim(claim, bot=True)
 
-def ajout_source(decl, repo):
+def ajout_source(decl: pywikibot.Claim, repo: pywikibot.DataSite) -> None:
     ref = pywikibot.Claim(repo, u'P248')
     ref.setTarget(pywikibot.ItemPage(repo, 'Q41001657'))
 
     decl.addSource(ref, bot=True)
 
-def ajoutdeclarations(mapping, repo):
+def ajoutdeclarations(mapping: pd.DataFrame, repo: pywikibot.DataSite) -> None:
     err_quids = []
     modif_qids = []
 

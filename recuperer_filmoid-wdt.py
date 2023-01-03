@@ -1,3 +1,10 @@
+#!/usr/local/bin/python3
+
+"""
+Créer le fichier CSV qui mappe les identifiants de la Cinémathèque aux URIs Wikidata
+pour les oeuvres cinématographiques produites au Québec.
+"""
+
 import pandas as pd
 import requests
 import pydash
@@ -40,7 +47,7 @@ def pull_clean(sparql: str) -> pd.DataFrame:
     return (dataframe)
 
 
-def main():
+def main() -> None:
     wdt_cmtqId = pull_clean(requete)
 
     wdt_cmtqId.to_csv("wdt_cmtqID.csv", index=False)
