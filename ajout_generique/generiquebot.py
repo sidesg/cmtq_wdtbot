@@ -1,3 +1,9 @@
+#!/usr/local/bin/python3
+
+"""
+Ajouter des déclarations à des oeuvres cinématographiques sur Wikidata.
+"""
+
 import time
 from pathlib import Path
 import argparse
@@ -5,22 +11,36 @@ import pandas as pd
 import pywikibot
 import re
 
-timestr = time.strftime("%Y%m%d-%H%M%S")
-
 parser = argparse.ArgumentParser()
 parser.add_argument("-l", "--limite", help="nombre maximum d'URIs Wikidata à modifier", type=int)
 args = parser.parse_args()
 
-CTVCHEMIN = Path.cwd() / "donnees" / "genre_qc.csv"
-GENDICT = {
-    28: "P162", 
-    29: "P162", 
-    48: "P162"
-    }
+RAPPORTCHEMIN = Path.cwd() / "rapports"
 
-def main():
+CTVCHEMIN = Path.cwd() / "donnees" / "genre_qc.csv"
+
+GENDICT = {
+    28: "P162", #Producteur = producteur ou productrice
+    # 29: "P162", #Producteur délégué = producteur ou productrice
+    # 48: "P162", #Producteur exécutif = producteur ou productrice
+    # 8: "P2515", #Costumes = costumier
+    # 31: "P58", #Scénario = scénariste
+    # 32: "P58", #Scripte = scénariste
+    # 15: "P161", #Interprétation = distribution
+    # 19: "P1040" #Montage images = monteur ou monteuse
+}
+
+
+class GeneriqueTriplet:
+    def __init__(self, sujqid: str, predquid: str, objquid: str):
+        self.sujqid = sujqid
+        self.predquid = predquid
+        self.objquid = objquid
+
+
+def main() -> None:
+    #Charget et nettoyer tous les triplets oeuvre-fonction-personne de CinéTV
     ctvdf = pd.read_csv(CTVCHEMIN, sep=";")
-    ctvdf = ctvdf[ctvdf["FonctionID"].isin(GENDICT)]
     ctvdf = nettoyerctv(ctvdf)
 
     wdt_cmtqId = chargerwdturi()
@@ -32,35 +52,30 @@ def main():
 
     ctvdf = pd.merge(wdt_persId, ctvdf, on="NomID")
     ctvdf = ctvdf.drop(["NomID", "Nom"], axis=1)
+
     ctvdf["FonctionID"] = ctvdf["FonctionID"].apply(lambda x: GENDICT[x])
+    ctvdf = ctvdf.drop_duplicates()
 
     ctvdf["persQid"] = ctvdf["persQid"].apply(lambda x: re.search(r"Q.+$", x).group().strip())
     ctvdf["OeuvreQid"] = ctvdf["OeuvreQid"].apply(lambda x: re.search(r"Q.+$", x).group().strip())
 
-    if args.limite:
-        ctvdf = ctvdf.head(args.limite) #Limiter le nombre d'URIs à modifier
+    if args.limite: #Limiter le nombre d'URIs à modifier
+        ctvdf = ctvdf.head(args.limite) 
+
+    triplets = creertriplets(ctvdf)
 
     repo = creerrepo()
 
-    ajoutdeclarations(ctvdf, repo)
+    changelog = verserdonnees(triplets, repo)
+    
+    creerrapport(changelog, RAPPORTCHEMIN)
 
 
-    # print(type(pywikibot.ItemPage(repo, "Q85815526")))
+def nettoyerctv(df:pd.DataFrame) -> pd.DataFrame:
+    df = df[df["FonctionID"].isin(GENDICT)]
 
-    # exit()
-
-    # print(ctvdf.head())
-    # print(len(ctvdf))
-
-def nettoyerctv(df):
-    #TODO: merge NomID-OrganismeID, Nom-Terme
-    mask = df['NomID'].isna()
-    column_name = 'NomID'
-    df.loc[mask, column_name] = df['OrganismeID']
-
-    mask = df['Nom'].isna()
-    column_name = 'Nom'
-    df.loc[mask, column_name] = df['dbo_Sujet_Terme']
+    df.loc[df['NomID'].isna(), 'NomID'] = df['OrganismeID']
+    df.loc[df['Nom'].isna(), 'Nom'] = df['dbo_Sujet_Terme']
 
     df = df[df["NomID"].notna()]
     df = df.astype({"NomID": "int64"})
@@ -71,7 +86,8 @@ def nettoyerctv(df):
     
     return df
 
-def chargerwdturi():
+
+def chargerwdturi() -> pd.DataFrame:
     #Charger le mapping FilmoID-WdtURI
     outdf = pd.read_csv("../wdt_cmtqId.csv")
     outdf = outdf[outdf["FilmoId"].str.isnumeric()]
@@ -80,7 +96,8 @@ def chargerwdturi():
 
     return outdf
 
-def chargerwdtpers():
+
+def chargerwdtpers() -> pd.DataFrame:
     #Charger le mapping FilmoID-WdtURI
     outdf = pd.read_csv("../wdt_cmtq-pers.csv")
     outdf = outdf.astype({"cmtqID": "int64"})
@@ -88,87 +105,101 @@ def chargerwdtpers():
 
     return outdf
 
-def creerrepo():
+
+def creerrepo() -> pywikibot.DataSite:
     site = pywikibot.Site("wikidata", "wikidata")
     repo = site.data_repository()
 
     return repo    
 
-def ajout_source(decl, repo):
+
+def ajout_source(decl: pywikibot.Claim, repo: pywikibot.DataSite) -> None:
     ref = pywikibot.Claim(repo, u'P248')
     ref.setTarget(pywikibot.ItemPage(repo, 'Q41001657'))
 
     decl.addSource(ref, bot=True)
 
-def ajout_declaration(itm, pred:str, cible:str, repo):
+
+def ajout_declaration(itm: pywikibot.ItemPage, pred: str, cible: str, repo: pywikibot.DataSite)  -> None:
     claim = pywikibot.Claim(repo, pred)
     target = pywikibot.ItemPage(repo, cible)
     claim.setTarget(target)
     
+    ajout_source(claim, repo)
     itm.addClaim(claim, bot=True)
 
-def ajoutdeclarations(mapping, repo):
-    err_quids = []
-    modif_qids = []
 
-    rapportdf = pd.DataFrame()
+def creertriplets(mapping: pd.DataFrame) -> list[GeneriqueTriplet]:
+    return [
+        GeneriqueTriplet(ligne["OeuvreQid"], ligne["FonctionID"], ligne["persQid"])
+        for idx, ligne
+        in mapping.iterrows()
+    ]
 
-    for oqid in mapping["OeuvreQid"].unique():
-        changed = False
 
-        item = pywikibot.ItemPage(repo, oqid)
+def creerrapport(df: pd.DataFrame, chemin:Path) -> None:
+    timestr = time.strftime("%Y%m%d-%H%M%S")
 
-        oeuvredf = mapping[mapping["OeuvreQid"] == oqid]
-        
-        for predqid in oeuvredf["FonctionID"].unique():
-            fonctdf = oeuvredf[oeuvredf["FonctionID"] == predqid]
-            fonctcibles = fonctdf["persQid"]
+    if not chemin.exists():
+        chemin.mkdir()
+    
+    df.to_excel(chemin / f"geneirique_modifications-{timestr}.xlsx", index=False)
 
-            for persqid in fonctcibles:
-                try:
-                    wdt_decldict = {
-                    claim.getTarget().getID(): claim
-                    for claim in item.claims[predqid]
-                    }
 
-                except: #Oeuvre n'a pas de déclaration avec pred
-                    #Terminal
-                    print(f"pas de {predqid} dans {oqid}")
-                    ajout_declaration(item, predqid, predqid, repo)
+def verserdonnees(triplets: list[GeneriqueTriplet], repo: pywikibot.DataSite) -> pd.DataFrame :
+    changelog = pd.DataFrame()
+    for trip in triplets:
+        modif = False
+        item = pywikibot.ItemPage(repo, trip.sujqid)
 
-                    continue
+        try:
+            decldict = {
+                claim.getTarget().getID(): claim
+                for claim in item.claims[trip.predquid]
+            }
 
-                if persqid in wdt_decldict: 
-                    ajout_source(wdt_decldict[persqid], repo)
-                    changed = True
+        except: #Oeuvre n'a pas de déclaration avec pred
+            print(f"pas de {trip.predquid} dans {trip.sujqid}")
+            ajout_declaration(item, trip.predquid, trip.objquid, repo)
+            modif = True
 
-                else:
-                    #Terminal
-                    #Ajouter autre occurence du pred avec nouv cible
-                    print(f"{persqid} pas {predqid} dans {oqid}")
+            continue
 
-                if changed == False:
-                    err_quids.append(oqid)
-                    outdf = pd.DataFrame(data=[{
-                        "oeuvre_qid": oqid,
-                        "fonct_qid": predqid,
-                        "personne_qid": persqid,
-                        "statut": "non modifié"
-                    }])
-                    
-                elif changed == True:
-                    modif_qids.append(oqid)
-                    outdf = pd.DataFrame(data=[{
-                        "oeuvre_qid": oqid,
-                        "fonct_qid": predqid,
-                        "personne_qid": persqid,
-                        "statut": "non modifié"
-                    }])
+        if trip.objquid in decldict: #Triplet existe déjà
+            try:
+                print(f"{trip.objquid} déjà cible de {trip.predquid} dans {trip.sujqid}")
+                ajout_source(decldict[trip.objquid], repo)
+                modif = True
+            
+            except:
+                print("Déclaration déjà référencée")
 
-                rapportdf = pd.concat([rapportdf, outdf])
+                continue
 
-    rapportdf.to_excel(f"rapports/prodqc_rapport-{timestr}.xlsx", index=False)
+        else: #Pred existe, mais pas avec cet objet
+            print(f"{trip.objquid} pas {trip.predquid} dans {trip.sujqid}")
+            ajout_declaration(item, trip.predquid, trip.objquid, repo)
+            modif = True
 
+        if modif == True:
+            outdf = pd.DataFrame(data=[{
+                "oeuvre": trip.sujqid,
+                "relation": trip.predquid,
+                "objet": trip.objquid,
+                "statut": "modifié"
+            }])
+
+        else:
+            outdf = pd.DataFrame(data=[{
+                "oeuvre": trip.sujqid,
+                "relation": trip.predquid,
+                "objet": trip.objquid,
+                "statut": "non modifié"
+            }])
+
+        changelog = pd.concat([changelog, outdf])
+    
+    return changelog
 
 
 if __name__ == "__main__":

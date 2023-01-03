@@ -1,3 +1,5 @@
+#!/usr/local/bin/python3
+
 import pandas as pd
 import requests
 import pydash
