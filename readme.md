@@ -1,4 +1,4 @@
-#CMTQ Wikidata Bots
+# CMTQ Wikidata Bots
 Ce projet contient des bots qui modifient Wikidata à partir des données de la Cinémathèque québécoise. Chaque sous-dossier contient un bot qui fonctionne indépendamment des autres.
 
 * ajout_generique : Ajouter des déclarations sur les membres du générique des oeuvres.
