@@ -1,0 +1,3 @@
+# Description....
+
+Utiliser l'argurment `--limite X` (`-l`) pour limiter les modifications aux X premiers URIs. Par exemple, `generiquebot.py -l 25` limitera les modifications aux 25 premiers URIs.

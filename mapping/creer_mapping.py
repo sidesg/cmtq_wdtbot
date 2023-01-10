@@ -2,27 +2,22 @@
 
 """
 Créer le fichier CSV qui mappe les identifiants de la Cinémathèque aux URIs Wikidata
-pour les oeuvres cinématographiques produites au Québec.
+pour les entités précisées dans l'argument "entite"
 """
 
 import pandas as pd
 import requests
 import pydash
+import argparse
+import yaml
+
+parser = argparse.ArgumentParser()
+parser.add_argument("entite", help="sélectionne l'entité dont le mapping est importé depuis Wikidata. Valeurs possibles : oevres, personnes.", type=str)
 
 APIURL = 'https://query.wikidata.org/sparql'
 HEADERS = {
     'User-Agent': 'CMTQBot/0.1 (gsides@cinematheque.qc.ca)'
 }
-
-requete = """
-    SELECT DISTINCT ?LienWikidata ?LienWikidataLabel ?FilmoId
-    WHERE {
-    ?LienWikidata wdt:P4276 ?FilmoId;
-        wdt:P31/wdt:P279* wd:Q2431196.
-    SERVICE wikibase:label { bd:serviceParam wikibase:language "fr,en". }
-    }
-    """
-
 
 def pull_clean(sparql: str) -> pd.DataFrame:
     """
@@ -48,9 +43,21 @@ def pull_clean(sparql: str) -> pd.DataFrame:
 
 
 def main() -> None:
+    args = parser.parse_args()
+
+    with open("requetes.yaml", "r") as infile:
+        entdict = yaml.safe_load(infile)
+
+    if args.entite not in entdict:
+        print(f"Valeur de l'argument 'entite', {args.entite}, non reconnue.")
+        exit()
+
+    requete = entdict[args.entite]["requete"]
+    rapport_nom = entdict[args.entite]["rapport_nom"]
+
     wdt_cmtqId = pull_clean(requete)
 
-    wdt_cmtqId.to_csv("wdt_cmtqID.csv", index=False)
+    wdt_cmtqId.to_csv(f"{rapport_nom}-wdtmapping.csv", index=False)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,18 @@
+oeuvres: 
+    requete: >
+        SELECT DISTINCT ?LienWikidata ?LienWikidataLabel ?FilmoId
+        WHERE {
+            ?LienWikidata wdt:P4276 ?FilmoId;
+                wdt:P31/wdt:P279* wd:Q2431196.
+            SERVICE wikibase:label { bd:serviceParam wikibase:language "fr,en". }
+        }
+    rapport_nom: oeuvres
+
+personnes: 
+    requete: >
+        SELECT DISTINCT ?cmtqID ?persQid ?persQidLabel
+        WHERE {
+            ?persQid wdt:P8971 ?cmtqID.
+            SERVICE wikibase:label { bd:serviceParam wikibase:language "fr,en". }
+        }
+    rapport_nom: personnes

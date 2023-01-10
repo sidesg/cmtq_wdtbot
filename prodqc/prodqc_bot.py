@@ -2,7 +2,7 @@
 
 """
 Ce bot associe des oeuvres cinématographiques au Québec en tant que lieu de création.
-Le bot dépend d'un export de CinéTV, QCPRODS, qui contient des oeuvres identifées comme
+Le bot dépend d'un export de CinéTV, PRODS_QC, qui contient des oeuvres identifées comme
 ayant été produites au Québec.
 """
 
@@ -17,43 +17,19 @@ timestr = time.strftime("%Y%m%d-%H%M%S")
 
 parser = argparse.ArgumentParser()
 parser.add_argument("-l", "--limite", help="nombre maximum d'URIs Wikidata à modifier", type=int)
-args = parser.parse_args()
 
-QCPRODS = Path.cwd() / "cinetv_prodqc"
+PRODS_QC = Path.cwd() / "cinetv_prodqc"
+MAPPING_FILMOID = Path("../mapping/oeuvres-wdtmapping.csv")
+
 FIMLOCOLS = [
     "Numéro séquentiel", 
     "Titre original"
 ]
 CANADAURI = "http://www.wikidata.org/entity/Q16"
 
-def main():
-    qcproddf = chargerctv()
-    qcproddf = nettoyerctv(qcproddf)
-
-    wdt_cmtqId = chargerwdturi()
-
-    qcprodWdt = pd.merge(wdt_cmtqId, qcproddf, on="FilmoId")
-
-    print(f'{len(qcprodWdt)} oeuvres à modifier sur Wikidata.')
-    
-    if args.limite:
-        qcprodWdt = qcprodWdt.head(args.limite) #Limiter le nombre d'URIs à modifier
-
-    start = input(f"Ce script modifiera {len(qcprodWdt)} notices sur Wikidata. Continuer? [o]ui/[N]on? ")
-
-    if not start.lower().startswith("o"):
-        exit()
-
-    qcprodWdt["LienWikidata"] = qcprodWdt["LienWikidata"].apply(lambda x: re.search(r"Q.+$", x).group().strip())
-
-    repo = creerrepo()
-
-    ajoutdeclarations(qcprodWdt, repo)
-
-
-def chargerctv() -> pd.DataFrame:
+def chargerctv(chemin : Path) -> pd.DataFrame:
     #Charger les oeuvres produites au QC à partir d'export(s) CinéTV
-    file_list = [f for f in QCPRODS.iterdir() if f.suffix == ".tsv"] 
+    file_list = [f for f in chemin.iterdir() if f.suffix == ".tsv"] 
 
     outdf = pd.DataFrame()
 
@@ -79,9 +55,9 @@ def nettoyerctv(df: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
-def chargerwdturi() -> pd.DataFrame:
+def chargerwdturi(chemin : Path) -> pd.DataFrame:
     #Charger le mapping FilmoID-WdtURI
-    outdf = pd.read_csv("../wdt_cmtqId.csv")
+    outdf = pd.read_csv(chemin)
     outdf = outdf[outdf["FilmoId"].str.isnumeric()]
     outdf = outdf.astype({"FilmoId": "int64"})
 
@@ -179,6 +155,32 @@ def ajoutdeclarations(mapping: pd.DataFrame, repo: pywikibot.DataSite) -> None:
 
     rapportdf.to_excel(f"rapports/prodqc_rapport-{timestr}.xlsx", index=False)
 
+
+def main():
+    args = parser.parse_args()
+
+    qcproddf = chargerctv(PRODS_QC)
+    qcproddf = nettoyerctv(qcproddf)
+
+    wdt_cmtqId = chargerwdturi(MAPPING_FILMOID)
+
+    qcprodWdt = pd.merge(wdt_cmtqId, qcproddf, on="FilmoId")
+
+    # print(f'{len(qcprodWdt)} oeuvres à modifier sur Wikidata.')
+    
+    if args.limite:
+        qcprodWdt = qcprodWdt.head(args.limite) #Limiter le nombre d'URIs à modifier
+
+    start = input(f"Ce script modifiera {len(qcprodWdt)} notices sur Wikidata. Continuer? [o]ui/[N]on? ")
+
+    if not start.lower().startswith("o"):
+        exit()
+
+    qcprodWdt["LienWikidata"] = qcprodWdt["LienWikidata"].apply(lambda x: re.search(r"Q.+$", x).group().strip())
+
+    repo = creerrepo()
+
+    ajoutdeclarations(qcprodWdt, repo)
 
 if __name__ == "__main__":
     main()

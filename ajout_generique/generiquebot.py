@@ -13,11 +13,12 @@ import re
 
 parser = argparse.ArgumentParser()
 parser.add_argument("-l", "--limite", help="nombre maximum d'URIs Wikidata à modifier", type=int)
-args = parser.parse_args()
 
 RAPPORTCHEMIN = Path.cwd() / "rapports"
 
 CTVCHEMIN = Path.cwd() / "donnees" / "genre_qc.csv"
+MAPPING_FILMOID = Path("../mapping/oeuvres-wdtmapping.csv")
+MAPPING_PERSONNEID = Path("../mapping/personnes-wdtmapping.csv")
 
 GENDICT = {
     28: "P162", #Producteur = producteur ou productrice
@@ -37,40 +38,6 @@ class GeneriqueTriplet:
         self.predquid = predquid
         self.objquid = objquid
 
-
-def main() -> None:
-    #Charget et nettoyer tous les triplets oeuvre-fonction-personne de CinéTV
-    ctvdf = pd.read_csv(CTVCHEMIN, sep=";")
-    ctvdf = nettoyerctv(ctvdf)
-
-    wdt_cmtqId = chargerwdturi()
-
-    ctvdf = pd.merge(wdt_cmtqId, ctvdf, on="FilmoId")
-    ctvdf = ctvdf.drop(["FilmoId", "TitreOriginal"], axis=1)
-
-    wdt_persId = chargerwdtpers()
-
-    ctvdf = pd.merge(wdt_persId, ctvdf, on="NomID")
-    ctvdf = ctvdf.drop(["NomID", "Nom"], axis=1)
-
-    ctvdf["FonctionID"] = ctvdf["FonctionID"].apply(lambda x: GENDICT[x])
-    ctvdf = ctvdf.drop_duplicates()
-
-    ctvdf["persQid"] = ctvdf["persQid"].apply(lambda x: re.search(r"Q.+$", x).group().strip())
-    ctvdf["OeuvreQid"] = ctvdf["OeuvreQid"].apply(lambda x: re.search(r"Q.+$", x).group().strip())
-
-    if args.limite: #Limiter le nombre d'URIs à modifier
-        ctvdf = ctvdf.head(args.limite) 
-
-    triplets = creertriplets(ctvdf)
-
-    repo = creerrepo()
-
-    changelog = verserdonnees(triplets, repo)
-    
-    creerrapport(changelog, RAPPORTCHEMIN)
-
-
 def nettoyerctv(df:pd.DataFrame) -> pd.DataFrame:
     df = df[df["FonctionID"].isin(GENDICT)]
 
@@ -87,9 +54,9 @@ def nettoyerctv(df:pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def chargerwdturi() -> pd.DataFrame:
+def chargerwdturi(chemin : Path) -> pd.DataFrame:
     #Charger le mapping FilmoID-WdtURI
-    outdf = pd.read_csv("../wdt_cmtqId.csv")
+    outdf = pd.read_csv(chemin)
     outdf = outdf[outdf["FilmoId"].str.isnumeric()]
     outdf = outdf.astype({"FilmoId": "int64"})
     outdf = outdf.rename(columns={'LienWikidata': "OeuvreQid"})
@@ -97,14 +64,22 @@ def chargerwdturi() -> pd.DataFrame:
     return outdf
 
 
-def chargerwdtpers() -> pd.DataFrame:
+def chargerwdtpers(chemin : Path) -> pd.DataFrame:
     #Charger le mapping FilmoID-WdtURI
-    outdf = pd.read_csv("../wdt_cmtq-pers.csv")
+    outdf = pd.read_csv(chemin)
     outdf = outdf.astype({"cmtqID": "int64"})
     outdf = outdf.rename(columns={'cmtqID': "NomID"})
 
     return outdf
 
+def fonctionidEnPid(fonctID:str) -> str:
+    """Transformer l'ID du rôle en URI Wikidata"""
+
+    return GENDICT[fonctID]
+
+def simplifierQid(qid:str) -> str:
+    """Éliminer l'URI avant le QID"""
+    return re.search(r"Q.+$", qid).group().strip()
 
 def creerrepo() -> pywikibot.DataSite:
     site = pywikibot.Site("wikidata", "wikidata")
@@ -159,25 +134,25 @@ def verserdonnees(triplets: list[GeneriqueTriplet], repo: pywikibot.DataSite) ->
             }
 
         except: #Oeuvre n'a pas de déclaration avec pred
-            print(f"pas de {trip.predquid} dans {trip.sujqid}")
+            # print(f"pas de {trip.predquid} dans {trip.sujqid}")
             ajout_declaration(item, trip.predquid, trip.objquid, repo)
             modif = True
 
             continue
 
         if trip.objquid in decldict: #Triplet existe déjà
-            try:
-                print(f"{trip.objquid} déjà cible de {trip.predquid} dans {trip.sujqid}")
+            try: #Identifier CMTQ comme source
+                # print(f"{trip.objquid} déjà cible de {trip.predquid} dans {trip.sujqid}")
                 ajout_source(decldict[trip.objquid], repo)
                 modif = True
             
             except:
-                print("Déclaration déjà référencée")
+                # print("Déclaration déjà référencée")
 
                 continue
 
         else: #Pred existe, mais pas avec cet objet
-            print(f"{trip.objquid} pas {trip.predquid} dans {trip.sujqid}")
+            # print(f"{trip.objquid} pas {trip.predquid} dans {trip.sujqid}")
             ajout_declaration(item, trip.predquid, trip.objquid, repo)
             modif = True
 
@@ -201,6 +176,44 @@ def verserdonnees(triplets: list[GeneriqueTriplet], repo: pywikibot.DataSite) ->
     
     return changelog
 
+
+def main() -> None:
+    args = parser.parse_args()
+
+    #Charget et nettoyer tous les triplets oeuvre-fonction-personne de CinéTV
+    generique_cmtq = pd.read_csv(CTVCHEMIN, sep=";")
+    generique_cmtq = nettoyerctv(generique_cmtq)
+
+    #Associer FilmoID et Wikidata URI
+    oeuvres_wdt = chargerwdturi(MAPPING_FILMOID)
+    generique_cmtq = pd.merge(oeuvres_wdt, generique_cmtq, on="FilmoId")
+
+    #Associer NomID et Wikidata URI
+    personnes_wdt = chargerwdtpers(MAPPING_PERSONNEID)
+    generique_cmtq = pd.merge(personnes_wdt, generique_cmtq, on="NomID")
+
+    #Associer FonctionID et Wikidata URI
+    generique_cmtq["FonctionID"] = generique_cmtq["FonctionID"].apply(fonctionidEnPid)
+    generique_cmtq = generique_cmtq.drop_duplicates()
+
+    generique_cmtq["persQid"] = generique_cmtq["persQid"].apply(simplifierQid)
+    generique_cmtq["OeuvreQid"] = generique_cmtq["OeuvreQid"].apply(simplifierQid)
+
+    if args.limite: #Limiter le nombre d'URIs à modifier
+        generique_cmtq = generique_cmtq.head(args.limite) 
+    
+    start = input(f"Ce script modifiera {len(generique_cmtq)} notices sur Wikidata. Continuer? [o]ui/[N]on? ")
+
+    if not start.lower().startswith("o"):
+        exit()
+
+    triplets = creertriplets(generique_cmtq)
+
+    repo = creerrepo()
+
+    changelog = verserdonnees(triplets, repo)
+    
+    creerrapport(changelog, RAPPORTCHEMIN)
 
 if __name__ == "__main__":
     main()
