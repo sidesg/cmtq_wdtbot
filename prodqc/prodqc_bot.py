@@ -17,6 +17,7 @@ timestr = time.strftime("%Y%m%d-%H%M%S")
 
 parser = argparse.ArgumentParser()
 parser.add_argument("-l", "--limite", help="nombre maximum d'URIs Wikidata à modifier", type=int)
+parser.add_argument("-q", "--qid", help="modifier un seul Qid (exclusif avec --limite)", type=str)
 
 PRODS_QC = Path.cwd() / "cinetv_prodqc"
 MAPPING_FILMOID = Path("../mapping/oeuvres-wdtmapping.csv")
@@ -75,14 +76,14 @@ def ajout_qualification(decl: pywikibot.Claim, repo: pywikibot.DataSite) -> None
     qualifier.setTarget(target)
 
     decl.addQualifier(qualifier, bot=True)
-    ajout_source(decl)
+    ajout_source(decl, repo=repo)
 
 def ajout_declaration(itm: pywikibot.ItemPage, repo: pywikibot.DataSite) -> None:
     claim = pywikibot.Claim(repo, u'P495')
     target = pywikibot.ItemPage(repo, 'Q16')
     claim.setTarget(target)
 
-    ajout_qualification(claim)
+    ajout_qualification(claim, repo=repo)
     
     itm.addClaim(claim, bot=True)
 
@@ -101,7 +102,7 @@ def ajoutdeclarations(mapping: pd.DataFrame, repo: pywikibot.DataSite) -> None:
     for idx, row in mapping.iterrows():
         changed = False
         qid = row["LienWikidata"]
-        filmoid = row["FilmoId"]
+        # filmoid = row["FilmoId"]
 
         try:
             item = pywikibot.ItemPage(repo, qid)
@@ -138,20 +139,20 @@ def ajoutdeclarations(mapping: pd.DataFrame, repo: pywikibot.DataSite) -> None:
             err_quids.append(qid)
             outdf = pd.DataFrame(data=[{
                 "qid": qid,
-                "filmoid": filmoid,
+                # "filmoid": filmoid,
                 "statut": "non modifié"
             }])
         elif changed == True:
             modif_qids.append(qid)
             outdf = pd.DataFrame(data=[{
                 "qid": qid,
-                "filmoid": filmoid,
+                # "filmoid": filmoid,
                 "statut": "modifié"
             }])
         rapportdf = pd.concat([rapportdf, outdf])
 
-    print(f"""{len(modif_qids)} oeuvres modifiées.
-    Qids non modifiés : {', '.join(err_quids)}""")
+    print(f"""{len(modif_qids)} oeuvres modifiées. 
+Qids non modifiés : {', '.join(err_quids)}""")
 
     rapportdf.to_excel(f"rapports/prodqc_rapport-{timestr}.xlsx", index=False)
 
@@ -159,14 +160,22 @@ def ajoutdeclarations(mapping: pd.DataFrame, repo: pywikibot.DataSite) -> None:
 def main():
     args = parser.parse_args()
 
+    repo = creerrepo()
+
+    if args.qid:
+        qid = pd.DataFrame(columns=["LienWikidata"], data=[args.qid])
+
+        ajoutdeclarations(qid, repo)
+
+        exit()
+        
+
     qcproddf = chargerctv(PRODS_QC)
     qcproddf = nettoyerctv(qcproddf)
 
     wdt_cmtqId = chargerwdturi(MAPPING_FILMOID)
 
     qcprodWdt = pd.merge(wdt_cmtqId, qcproddf, on="FilmoId")
-
-    # print(f'{len(qcprodWdt)} oeuvres à modifier sur Wikidata.')
     
     if args.limite:
         qcprodWdt = qcprodWdt.head(args.limite) #Limiter le nombre d'URIs à modifier
@@ -177,8 +186,6 @@ def main():
         exit()
 
     qcprodWdt["LienWikidata"] = qcprodWdt["LienWikidata"].apply(lambda x: re.search(r"Q.+$", x).group().strip())
-
-    repo = creerrepo()
 
     ajoutdeclarations(qcprodWdt, repo)
 
