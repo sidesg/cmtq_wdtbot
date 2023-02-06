@@ -1,6 +1,6 @@
 family = 'wikidata'
 mylang = 'wikidata'
-usernames['wikidata']['wikidata'] = 'Kabec20'
+usernames['wikidata']['wikidata'] = 'Cmtqwikibot'
 
 password_file = "user-password.py"
 

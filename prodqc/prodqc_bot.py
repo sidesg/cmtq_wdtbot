@@ -15,9 +15,6 @@ import pywikibot
 
 timestr = time.strftime("%Y%m%d-%H%M%S")
 
-parser = argparse.ArgumentParser()
-parser.add_argument("-l", "--limite", help="nombre maximum d'URIs Wikidata à modifier", type=int)
-parser.add_argument("-q", "--qid", help="modifier un seul Qid (exclusif avec --limite)", type=str)
 
 PRODS_QC = Path.cwd() / "cinetv_prodqc"
 MAPPING_FILMOID = Path("../mapping/oeuvres-wdtmapping.csv")
@@ -28,22 +25,74 @@ FIMLOCOLS = [
 ]
 CANADAURI = "http://www.wikidata.org/entity/Q16"
 
-def chargerctv(chemin : Path) -> pd.DataFrame:
-    #Charger les oeuvres produites au QC à partir d'export(s) CinéTV
-    file_list = [f for f in chemin.iterdir() if f.suffix == ".tsv"] 
 
-    outdf = pd.DataFrame()
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-f", "--fichier", help="charger un fichier source de CinéTV plutôt que le dossier 'rapports' dans son ensemble", type=str)
+    parser.add_argument("-l", "--limite", help="nombre maximum d'URIs Wikidata à modifier", type=int)
+    parser.add_argument("-q", "--qid", help="modifier un seul Qid (exclusif avec --limite)", type=str)
 
-    #TODO: make flexible to accomodate csv and xlsx
-    for file_path in file_list:
-        indf = pd.read_csv(
-            file_path,
+    args = parser.parse_args()
+
+    repo = creerrepo()
+
+    if args.qid:
+        qid = pd.DataFrame(columns=["LienWikidata"], data=[args.qid])
+
+        ajoutdeclarations(qid, repo)
+
+        exit()
+        
+
+    qcproddf = chargerctv(PRODS_QC, args.fichier)
+
+    qcproddf = nettoyerctv(qcproddf)
+
+    wdt_cmtqId = chargerwdturi(MAPPING_FILMOID)
+
+    qcprodWdt = pd.merge(wdt_cmtqId, qcproddf, on="FilmoId")
+
+    if args.limite: #Limiter le nombre d'URIs à modifier
+        qcprodWdt = qcprodWdt.head(args.limite) 
+
+    start = input(f"Ce script modifiera {len(qcprodWdt)} notices sur Wikidata. Continuer? [o]ui/[N]on? ")
+
+    if not start.lower().startswith("o"):
+        exit()
+
+    qcprodWdt["LienWikidata"] = qcprodWdt["LienWikidata"].apply(lambda x: re.search(r"Q.+$", x).group().strip())
+
+    ajoutdeclarations(qcprodWdt, repo)
+
+
+def chargerctv(chemin : Path, fichier: str) -> pd.DataFrame:
+    """Charger les données de l'export CinéTV"""
+
+    if fichier:
+        outdf = pd.read_csv(
+            chemin / fichier,
             usecols=FIMLOCOLS,
             sep="\t",
             encoding="cp1252"
         )
-    
-        outdf = pd.concat([outdf, indf])
+
+    else:
+        outdf = pd.DataFrame()
+
+        file_list = [f for f in chemin.iterdir() if f.suffix == ".tsv"] 
+
+        outdf = pd.DataFrame()
+
+        #TODO: make flexible to accomodate csv and xlsx
+        for file_path in file_list:
+            indf = pd.read_csv(
+                file_path,
+                usecols=FIMLOCOLS,
+                sep="\t",
+                encoding="cp1252"
+            )
+        
+            outdf = pd.concat([outdf, indf])
 
     return outdf
 
@@ -51,6 +100,8 @@ def nettoyerctv(df: pd.DataFrame) -> pd.DataFrame:
     df = df.drop_duplicates()
     df = df.rename(columns={'Numéro séquentiel': "FilmoId"})
     df = df[df["FilmoId"].notnull()]
+
+    df["FilmoId"] = df["FilmoId"].astype(str)
     df = df[df["FilmoId"].str.isnumeric()]
     df = df.astype({"FilmoId": "int64"})
 
@@ -156,38 +207,6 @@ Qids non modifiés : {', '.join(err_quids)}""")
 
     rapportdf.to_excel(f"rapports/prodqc_rapport-{timestr}.xlsx", index=False)
 
-
-def main():
-    args = parser.parse_args()
-
-    repo = creerrepo()
-
-    if args.qid:
-        qid = pd.DataFrame(columns=["LienWikidata"], data=[args.qid])
-
-        ajoutdeclarations(qid, repo)
-
-        exit()
-        
-
-    qcproddf = chargerctv(PRODS_QC)
-    qcproddf = nettoyerctv(qcproddf)
-
-    wdt_cmtqId = chargerwdturi(MAPPING_FILMOID)
-
-    qcprodWdt = pd.merge(wdt_cmtqId, qcproddf, on="FilmoId")
-    
-    if args.limite:
-        qcprodWdt = qcprodWdt.head(args.limite) #Limiter le nombre d'URIs à modifier
-
-    start = input(f"Ce script modifiera {len(qcprodWdt)} notices sur Wikidata. Continuer? [o]ui/[N]on? ")
-
-    if not start.lower().startswith("o"):
-        exit()
-
-    qcprodWdt["LienWikidata"] = qcprodWdt["LienWikidata"].apply(lambda x: re.search(r"Q.+$", x).group().strip())
-
-    ajoutdeclarations(qcprodWdt, repo)
 
 if __name__ == "__main__":
     main()

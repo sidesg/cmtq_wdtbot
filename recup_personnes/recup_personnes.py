@@ -13,6 +13,11 @@ HEADERS = {
 timestr = time.strftime("%Y%m%d-%H%M%S")
 EXPORTPTH = f'exports/personnes_donnees-{timestr}.csv'
 
+def main():
+    exportdf = importpersonnes()
+
+    exportdf.to_csv(EXPORTPTH, index=False)
+    
 
 def pull_clean(requete: str) -> pd.DataFrame:
     """
@@ -79,15 +84,12 @@ def importpersonnes():
 
 def uritraitement():
     """
-    Cette fonction replace les URIs des données Wikidata et les remplace
+    Cette fonction remplace les URIs des données Wikidata 
     avec des equivalents lisibles par humain
     """
     ...
 
-def main():
-    exportdf = importpersonnes()
 
-    exportdf.to_csv(EXPORTPTH, index=False)
 
 
 if __name__ == "__main__":

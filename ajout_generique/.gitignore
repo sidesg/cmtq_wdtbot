@@ -1,5 +1,6 @@
 apicache-py3
-*.txt
 user-password.py
+user-config.py
 throttle.ctrl
 pywikibot.lwp
+*.json
