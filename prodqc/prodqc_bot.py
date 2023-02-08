@@ -169,17 +169,17 @@ def ajoutdeclarations(mapping: pd.DataFrame, repo: pywikibot.DataSite) -> None:
                             if 'P131' not in claim.qualifiers: #Si la déclaration n'a pas de qualification "localisation administrative"
                                 ajout_qualification(claim, repo)
                                 changed = True
-                            else:
+                            else: #TODO: revise to take source type and target into account
                                 try:
                                     ajout_source(claim, repo)
                                     changed = True
                                 except:
                                     continue                                                       
-                else:
+                else: #Oui "pays d'origine", mais cible != Canada
                     ajout_declaration(item, repo)
                     changed = True
 
-            else:
+            else: #Aucune déclaration "pays d'origine"
                 ajout_declaration(item, repo)
                 changed = True
     

@@ -1,0 +1,1 @@
+Les exports de CinéTV sont placés ici. Actuellement, seulement le format TSV est supporté.
