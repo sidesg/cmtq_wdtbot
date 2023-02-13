@@ -10,13 +10,13 @@ HEADERS = {
     'User-Agent': 'CMTQBot/0.1 (gsides@cinematheque.qc.ca)'
 }
 
-timestr = time.strftime("%Y%m%d-%H%M%S")
-EXPORTPTH = f'exports/personnes_donnees-{timestr}.csv'
-
 def main():
+    timestr = time.strftime("%Y%m%d-%H%M%S")
+    exportpth = f'exports/personnes_donnees-{timestr}.csv'
+    
     exportdf = importpersonnes()
 
-    exportdf.to_csv(EXPORTPTH, index=False)
+    exportdf.to_csv(exportpth, index=False)
     
 
 def pull_clean(requete: str) -> pd.DataFrame:
@@ -48,7 +48,7 @@ def pull_clean(requete: str) -> pd.DataFrame:
     return dataframe
 
 
-def importpersonnes():
+def importpersonnes() -> pd.DataFrame:
     """
     Cette fonction produit un tableau organisé par Wikidata Qid en fonction 
     de la requête SPARQL qui décrit les personnes avec un identifiant de la CQ.

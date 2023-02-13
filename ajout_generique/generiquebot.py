@@ -17,45 +17,54 @@ import pywikibot
 import re
 import pydash
 
+import pprint
+import json
+
 RAPPORTCHEMIN = Path.cwd() / "rapports"
 
-CTVCHEMIN = Path.cwd() / "donnees" / "genre_qc.csv"
+CTVCHEMIN = Path.cwd() / "donnees" / "gen_real_qc.csv"
 MAPPING_FILMOID = Path("../mapping/oeuvres-wdtmapping.csv")
 MAPPING_PERSONNEID = Path("../mapping/personnes-wdtmapping.csv")
+FONCTION_MAP = Path("donnees/fonction_map.csv")
 
 timestr = time.strftime("%Y%m%d-%H%M%S")
 
-GENDICT = {
-    28: "P162", #Producteur = producteur ou productrice
-    29: "P1431", #Producteur délégué = producteur ou productrice
-    # 48: "P162", #Producteur exécutif = producteur ou productrice
-    8: "P2515", #Costumes = costumier
-    31: "P58", #Scénario = scénariste
-    32: "P58", #Scripte = scénariste
-    15: "P161", #Interprétation = distribution
-    19: "P1040" #Montage images = monteur ou monteuse
-}
-
 
 class GeneriqueTriplet:
-    def __init__(self, sujqid: str, predquid: str, objquid: str, repo: pywikibot.DataSite):
+    """Triplet des trois éléments d'une déclarations RDF"""
+    qualDict = pd.read_csv("donnees/qualifications.csv")
+    qualDict = qualDict[qualDict["Pred"].notna()]
+    qualDict = dict(zip(qualDict["Pred"], qualDict["objrole"]))
+
+    def __init__(
+        self, 
+        sujqid: str, 
+        predquid: str, 
+        objquid: str, 
+        repo: pywikibot.DataSite,
+        qualDict = qualDict
+    ):
         self.sujqid = sujqid
         self.predquid = predquid
         self.objquid = objquid
+
+        self.fonctqual = qualDict.get(self.predquid, None)
 
         self.ajoutee = False
 
         self.item = pywikibot.ItemPage(repo, self.sujqid)
 
-    def declarations_existants(self) -> dict:
+    def declaration_existante(self) -> pywikibot.Claim:
+        """Retourner la déclaration Wikidata avec les mêmes sujet-prédicat-objet si une existe."""
         try:
-            return {
+            decls_avec_pred = {
                 claim.getTarget().getID(): claim
                 for claim in self.item.claims[self.predquid]
             }
+            return decls_avec_pred[self.objquid]
+            
         except:
             return None
-
 
 def main() -> None:
     parser = argparse.ArgumentParser()
@@ -67,20 +76,26 @@ def main() -> None:
     if not RAPPORTCHEMIN.exists():
         RAPPORTCHEMIN.mkdir()
 
+    gendict = pd.read_csv(FONCTION_MAP)
+    gendict = dict(zip(gendict["FonctionID"], gendict["WdtID"]))
+
     #Charget et nettoyer tous les triplets oeuvre-fonction-personne de CinéTV
     generique_cmtq = pd.read_csv(CTVCHEMIN, sep=";")
-    generique_cmtq = nettoyerctv(generique_cmtq)
+    generique_cmtq = nettoyerctv(generique_cmtq, gendict)
+
 
     #Associer FilmoID et Wikidata URI
     oeuvres_wdt = chargerwdturi(MAPPING_FILMOID)
+
     generique_cmtq = pd.merge(oeuvres_wdt, generique_cmtq, on="FilmoId")
 
     #Associer NomID et Wikidata URI
     personnes_wdt = chargerwdtpers(MAPPING_PERSONNEID)
+
     generique_cmtq = pd.merge(personnes_wdt, generique_cmtq, on="NomID")
 
     #Associer FonctionID et Wikidata URI
-    generique_cmtq["FonctionID"] = generique_cmtq["FonctionID"].apply(fonctionidEnPid)
+    generique_cmtq["FonctionID"] = generique_cmtq["FonctionID"].apply(lambda x: gendict[x])
     generique_cmtq = generique_cmtq.drop_duplicates()
 
     generique_cmtq["persQid"] = generique_cmtq["persQid"].apply(simplifierQid)
@@ -89,6 +104,8 @@ def main() -> None:
     # TODO: option, créer ce rapport
     # creerrapport(generique_cmtq, "test")
 
+    # exit()
+
     repo = creerrepo()
 
     if args.qid:
@@ -96,13 +113,15 @@ def main() -> None:
 
         triplets = creertriplets(generique_cmtq, repo)
 
-        # verserdonnees(triplets, repo)
+        print(len(triplets))
 
-        # supprimer_doublons(triplets)
+        verserdonnees(triplets, repo)
+
+        supprimer_doublons(triplets)
         
-        # changelog = creer_changelog(triplets)
+        changelog = creer_changelog(triplets)
     
-        # creerrapport(changelog, "generique_modifications")
+        creerrapport(changelog, "generique_modifications")
 
         exit()
 
@@ -119,21 +138,19 @@ def main() -> None:
 
     verserdonnees(triplets, repo)
 
+    supprimer_doublons(triplets)
+
     changelog = creer_changelog(triplets)
     
     creerrapport(changelog, "generique_modifications")
 
 
-def nettoyerctv(df:pd.DataFrame) -> pd.DataFrame:
-    df = df[df["FonctionID"].isin(GENDICT)]
-
-    df.loc[df['NomID'].isna(), 'NomID'] = df['OrganismeID']
-    df.loc[df['Nom'].isna(), 'Nom'] = df['dbo_Sujet_Terme']
+def nettoyerctv(df:pd.DataFrame, gendict: dict) -> pd.DataFrame:
+    """Éliminer les lignes suplerflues, renommer des colonnes"""
+    df = df[df["FonctionID"].isin(gendict)]
 
     df = df[df["NomID"].notna()]
     df = df.astype({"NomID": "int64"})
-
-    df = df.drop(["OrganismeID", "dbo_Sujet_Terme"], axis=1)
 
     df = df.rename(columns={'FilmoID': "FilmoId"})
     
@@ -158,11 +175,6 @@ def chargerwdtpers(chemin : Path) -> pd.DataFrame:
 
     return outdf
 
-def fonctionidEnPid(fonctID:str) -> str:
-    """Transformer l'ID du rôle en URI Wikidata"""
-
-    return GENDICT[fonctID]
-
 def simplifierQid(qid:str) -> str:
     """Éliminer l'URI avant le QID"""
     return re.search(r"Q.+$", qid).group().strip()
@@ -175,6 +187,7 @@ def creerrepo() -> pywikibot.DataSite:
 
 
 def ajout_source(decl: pywikibot.Claim, repo: pywikibot.DataSite) -> None:
+    """Ajouter une source, Affirmé dans (P248) CinéTC (Q41001657)"""
     ref = pywikibot.Claim(repo, u'P248')
     ref.setTarget(pywikibot.ItemPage(repo, 'Q41001657'))
 
@@ -202,29 +215,38 @@ def verserdonnees(triplets: list[GeneriqueTriplet], repo: pywikibot.DataSite) ->
     for trip in triplets:
         print(f"{trip.sujqid}, {trip.predquid}, {trip.objquid}")
 
-        declarations_existants = trip.declarations_existants()
+        declaration_existante = trip.declaration_existante()
 
-        if not declarations_existants:
+        if not declaration_existante: #Bon prédicat absent; bon prédicat présent mais pas le bon objet
             print(f"Créer triplet: {trip.sujqid}, {trip.predquid}, {trip.objquid}")
-            # ajout_declaration(trip.item, trip.predquid, trip.objquid, repo)
+            ajout_declaration(trip.item, trip.predquid, trip.objquid, repo)
             trip.ajoutee = True
 
-            continue
+        else: #Prédicate avec bon objet existe déjà
+            references_json = declaration_existante.toJSON().get("references", None)
 
-        if trip.objquid in declarations_existants: #Triplet existe déjà avec obj
-            try: #Identifier CMTQ comme source
-                # ajout_source(declarations_existants[trip.objquid], repo)
-                trip.ajoutee = True
+            if references_json:
+                reference_cibles = list()
+
+                for reference in references_json:
+                    sources_affirme_dans = pydash.get(reference, "snaks.P248", None)
+
+                    if sources_affirme_dans:
+                        for cible in sources_affirme_dans:
+                            reference_cibles.append("Q" + str(pydash.get(cible, "datavalue.value.numeric-id", None)))
+    
+                if "Q41001657" in reference_cibles:
+                    print("Rien ajouté")
+
+                else: #Aucune source du bon type, bon type mais pas bonne cible
+                    print(f"Ajouter source: {trip.sujqid}, {trip.predquid}, {trip.objquid}")
+                    ajout_source(declaration_existante, repo)
+                    trip.ajoutee = True
+                    
+            else: #Déclaration non sourcée
                 print(f"Ajouter source: {trip.sujqid}, {trip.predquid}, {trip.objquid}")
-            
-            except: #Triplet existe et sourcé
-                print("Rien ajouté")
-                continue
-
-        else: #Pred existe, mais pas avec cet objet
-            # ajout_declaration(trip.item, trip.predquid, trip.objquid, repo)
-            trip.ajoutee = True
-            print(f"Ajouter objet: {trip.objquid} à {trip.sujqid}, {trip.predquid}")
+                ajout_source(declaration_existante, repo)
+                trip.ajoutee = True
 
 
 def creer_changelog(trips: list[GeneriqueTriplet]) -> pd.DataFrame:
@@ -251,23 +273,30 @@ def creer_changelog(trips: list[GeneriqueTriplet]) -> pd.DataFrame:
     
     return changelog
 
-def creerrapport(df: pd.DataFrame, nom:str) -> None:    
+def creerrapport(df: pd.DataFrame, nom:str) -> None:
+    """Créer un rapport tabulaire dans le dossier `rapports`"""    
     df.to_excel(RAPPORTCHEMIN / f"{nom}-{timestr}.xlsx", index=False)
 
 
 def supprimer_doublons(trips: list[GeneriqueTriplet]):
-    # trips = [t for t in trips if t.ajoutee == True]
+    trips = [t for t in trips if t.ajoutee == True]
 
     for trip in trips:
-        for claim in trip.item.claims['P3092']: #Finds all statements (P3092, membre de l'équipe du film)
-            if claim.getTarget().getID() == trip.objquid: #Looks for claims with same object as triple
-                claimjson = claim.toJSON()
+        # print(trip.sujqid, trip.predquid, trip.objquid)
+        # print(trip.fonctqual)
 
-                for qualif in pydash.get(claimjson, "qualifiers.P3831"): #Finds all qualifications P3831 rôle de l'objet 
-                    print("Q" + str(pydash.get(qualif, "datavalue.value.numeric-id")))
-                    if trip.fonctqual == ("Q" + str(pydash.get(qualif, "datavalue.value.numeric-id"))): #Checks that qualification object matches function Pid in added triplet
-                        print(f"Remove {claim.getID()}")
-                        # trip.item.removeClaims(claim, summary=u"Removing redundant claim")
+        item_claims = trip.item.get()["claims"] 
+
+        if "P3092" in item_claims:
+            for claim in trip.item.claims['P3092']: #Finds all statements (P3092, membre de l'équipe du film)
+                if claim.getTarget().getID() == trip.objquid: #Looks for claims with same object as triple
+                    claimjson = claim.toJSON()
+
+                    for qualif in pydash.get(claimjson, "qualifiers.P3831"): #Finds all qualifications P3831 rôle de l'objet 
+                        print("Q" + str(pydash.get(qualif, "datavalue.value.numeric-id")))
+                        if trip.fonctqual == ("Q" + str(pydash.get(qualif, "datavalue.value.numeric-id"))): #Checks that qualification object matches function Pid in added triplet
+                            print(f"Remove {claim.getID()}")
+                            trip.item.removeClaims(claim, summary=u"Removing redundant claim")
 
 
 
