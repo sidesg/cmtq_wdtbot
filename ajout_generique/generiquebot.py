@@ -38,6 +38,7 @@ class GeneriqueTriplet:
         self.objquid = objquid
 
         self.ajoutee = False
+        self.referencee = False
 
         self.fonctqual = qualDict.get(self.predquid, None)
 
@@ -57,7 +58,7 @@ class GeneriqueTriplet:
             return None
 
 def main() -> None:
-    timestr = time.strftime("%Y%m%d-%H%M%S")
+    # timestr = time.strftime("%Y%m%d-%H%M%S")
     parser = argparse.ArgumentParser()
 
     parser.add_argument("source", help="Nom du fichier source dans /donnees", type=str)
@@ -110,13 +111,13 @@ def main() -> None:
 
         print(len(triplets))
 
-        verserdonnees(triplets, repo)
+        verserdonnees(triplets, repo, args.source)
 
         supprimer_doublons(triplets)
         
-        changelog = creer_changelog(triplets)
+        # changelog = creer_changelog(triplets)
     
-        creerrapport(changelog, "generique_modifications", timestr)
+        # creerrapport(changelog, "generique_modifications", timestr)
 
         exit()
 
@@ -130,13 +131,13 @@ def main() -> None:
     if not start.lower().startswith("o"):
         exit()
 
-    verserdonnees(triplets, repo)
+    verserdonnees(triplets, repo, args.source)
 
     supprimer_doublons(triplets)
 
-    changelog = creer_changelog(triplets)
+    # changelog = creer_changelog(triplets)
     
-    creerrapport(changelog, "generique_modifications", timestr)
+    # creerrapport(changelog, "generique_modifications", timestr)
 
 
 def nettoyerctv(df:pd.DataFrame, gendict: dict) -> pd.DataFrame:
@@ -205,7 +206,15 @@ def creertriplets(mapping: pd.DataFrame, repo: pywikibot.DataSite) -> list[Gener
     ]
 
 
-def verserdonnees(triplets: list[GeneriqueTriplet], repo: pywikibot.DataSite) -> None:
+def verserdonnees(triplets: list[GeneriqueTriplet], repo: pywikibot.DataSite, source: str) -> None:
+    timestr = time.strftime("%Y%m%d-%H%M%S")
+    source = Path(source).stem
+
+    rapport_chemin = RAPPORTCHEMIN / f"generique_modifications-{source}-{timestr}.csv"
+
+    with open(rapport_chemin, "w", encoding="utf-8") as outfile:
+        outfile.write(f"oeuvre,relation,objet,triplet_ajoute,source_ajoutee")
+
     for idx, trip in enumerate(triplets):
         if (idx + 1) % 10 == 0:
             print(f"{idx+1} triplets traités ({round(((idx+1)/len(triplets)*100))}%)")
@@ -216,6 +225,7 @@ def verserdonnees(triplets: list[GeneriqueTriplet], repo: pywikibot.DataSite) ->
             # print(f"Créer triplet: {trip.sujqid}, {trip.predquid}, {trip.objquid}")
             ajout_declaration(trip.item, trip.predquid, trip.objquid, repo)
             trip.ajoutee = True
+            trip.referencee = True
 
         else: #Prédicat avec bon objet existe déjà
             declaration_json = declaration_existante.toJSON()
@@ -233,17 +243,21 @@ def verserdonnees(triplets: list[GeneriqueTriplet], repo: pywikibot.DataSite) ->
     
                 if "Q41001657" in reference_cibles:
                     # print("Rien ajouté")
-                    continue
+                    pass
 
                 else: #Aucune source du bon type, bon type mais pas bonne cible
                     # print(f"Ajouter source: {trip.sujqid}, {trip.predquid}, {trip.objquid}")
                     ajout_source(declaration_existante, repo)
-                    trip.ajoutee = True
+                    trip.referencee = True
                     
             else: #Déclaration non sourcée
                 # print(f"Ajouter source: {trip.sujqid}, {trip.predquid}, {trip.objquid}")
                 ajout_source(declaration_existante, repo)
-                trip.ajoutee = True
+                trip.referencee = True
+        
+        if trip.referencee == True:
+            with open(rapport_chemin, "a") as outfile:
+                outfile.write(f"\n{trip.sujqid},{trip.predquid},{trip.objquid},{trip.ajoutee},{trip.referencee}")
 
 
 def creer_changelog(trips: list[GeneriqueTriplet]) -> pd.DataFrame:
@@ -254,7 +268,8 @@ def creer_changelog(trips: list[GeneriqueTriplet]) -> pd.DataFrame:
             "oeuvre": trip.sujqid,
             "relation": trip.predquid,
             "objet": trip.objquid,
-            "modification": trip.ajoutee
+            "triplet_ajoute": trip.ajoutee,
+            "source_ajoutee": trip.referencee
         }])
 
         changelog = pd.concat([changelog, outdf])
@@ -283,7 +298,7 @@ def supprimer_doublons(trips: list[GeneriqueTriplet]):
                     for qualif in pydash.get(claimjson, "qualifiers.P3831"): #Finds all qualifications P3831 rôle de l'objet 
                         # print("Q" + str(pydash.get(qualif, "datavalue.value.numeric-id")))
                         if trip.fonctqual == ("Q" + str(pydash.get(qualif, "datavalue.value.numeric-id"))): #Checks that qualification object matches function Pid in added triplet
-                            if len(pydash.get(claimjson, "qualifiers.P3831")) > 1: #Ne supprime pas s'il y a plusieurs rôles
+                            if len(pydash.get(claimjson, "qualifiers.P3831")) > 2: #Ne supprime pas s'il y a plusieurs rôles
                                 print(f"Remove {claim.getID()}")
                                 trip.item.removeClaims(claim, summary=u"Removing redundant claim, more specific predicate available.")
                             else:
@@ -295,6 +310,8 @@ def supprimer_doublons(trips: list[GeneriqueTriplet]):
                     if claim.getTarget().getID() == trip.objquid: #Déclaration "distribution" avec le même objet
                         print(f"Remove {claim.getID()}")
                         trip.item.removeClaims(claim, summary=u"Removing redundant claim, more specific predicate available.")
+
+                        break
 
 
 if __name__ == "__main__":
