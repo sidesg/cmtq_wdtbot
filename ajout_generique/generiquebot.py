@@ -10,6 +10,7 @@ import pandas as pd
 import pywikibot
 import re
 import pydash
+import requests
 
 RAPPORTCHEMIN = Path.cwd() / "rapports"
 
@@ -43,7 +44,6 @@ class GeneriqueTriplet:
         self.fonctqual = qualDict.get(self.predquid, None)
 
         self.item = pywikibot.ItemPage(repo, self.sujqid)
-        # self.declaration = self.declaration_existante() if self.declaration_existante() else None
 
     def declaration_existante(self) -> pywikibot.Claim | None:
         """Retourner la déclaration Wikidata avec les mêmes sujet-prédicat-objet si une existe."""
@@ -56,6 +56,8 @@ class GeneriqueTriplet:
             
         except:
             return None
+        
+
 
 def main() -> None:
     # timestr = time.strftime("%Y%m%d-%H%M%S")
@@ -114,10 +116,6 @@ def main() -> None:
         verserdonnees(triplets, repo, args.source)
 
         supprimer_doublons(triplets)
-        
-        # changelog = creer_changelog(triplets)
-    
-        # creerrapport(changelog, "generique_modifications", timestr)
 
         exit()
 
@@ -135,11 +133,6 @@ def main() -> None:
 
     supprimer_doublons(triplets)
 
-    # changelog = creer_changelog(triplets)
-    
-    # creerrapport(changelog, "generique_modifications", timestr)
-
-
 def nettoyerctv(df:pd.DataFrame, gendict: dict) -> pd.DataFrame:
     """Éliminer les lignes suplerflues, renommer des colonnes"""
     df = df[df["FonctionID"].isin(gendict)]
@@ -155,6 +148,7 @@ def nettoyerctv(df:pd.DataFrame, gendict: dict) -> pd.DataFrame:
 def chargerwdturi(chemin : Path) -> pd.DataFrame:
     #Charger le mapping FilmoID-WdtURI
     outdf = pd.read_csv(chemin)
+    outdf = outdf.astype({"FilmoId": str})
     outdf = outdf[outdf["FilmoId"].str.isnumeric()]
     outdf = outdf.astype({"FilmoId": "int64"})
     outdf = outdf.rename(columns={'LienWikidata': "OeuvreQid"})
@@ -205,6 +199,37 @@ def creertriplets(mapping: pd.DataFrame, repo: pywikibot.DataSite) -> list[Gener
         in mapping.iterrows()
     ]
 
+def animation_bool(trip: GeneriqueTriplet):
+    APIURL = 'https://query.wikidata.org/sparql'
+    HEADERS = {
+        'User-Agent': 'CMTQBot/0.1 (gsides@cinematheque.qc.ca)'
+    }
+    
+    sparql =f"""
+    SELECT *
+    WHERE {{
+        ?oeuvre wdt:P31/wdt:P279* wd:Q202866.
+        BIND (wd:{trip.sujqid} AS ?oeuvre)
+    }}
+    """
+
+    r = requests.get(
+        APIURL,
+        params={'format': 'json', 'query': sparql},
+        headers=HEADERS
+    )
+
+    data = r.json()
+
+    dataframe = pd.DataFrame.from_dict(
+        [x for x in pydash.get(data, 'results.bindings')])
+
+    for k in list(dataframe.columns.values):
+        def extract_value(row, col):
+            return (pydash.get(row[col], 'value'))
+        dataframe[k] = dataframe.apply(extract_value, col=k, axis=1)
+
+    return False if dataframe.empty else True
 
 def verserdonnees(triplets: list[GeneriqueTriplet], repo: pywikibot.DataSite, source: str) -> None:
     timestr = time.strftime("%Y%m%d-%H%M%S")
@@ -219,11 +244,17 @@ def verserdonnees(triplets: list[GeneriqueTriplet], repo: pywikibot.DataSite, so
         if (idx + 1) % 10 == 0:
             print(f"{idx+1} triplets traités ({round(((idx+1)/len(triplets)*100))}%)")
         
+        est_animation = animation_bool(trip)
+        if est_animation and trip.predquid == "P161":
+            trip.predquid = "P725"
+
         declaration_existante = trip.declaration_existante()
 
+        # print(trip.sujqid, trip.predquid, trip.objquid)
+
         if not declaration_existante: #Bon prédicat absent; bon prédicat présent mais pas le bon objet
-            # print(f"Créer triplet: {trip.sujqid}, {trip.predquid}, {trip.objquid}")
             ajout_declaration(trip.item, trip.predquid, trip.objquid, repo)
+            # print("Bon prédicat absent; bon prédicat présent mais pas le bon objet")
             trip.ajoutee = True
             trip.referencee = True
 
@@ -246,39 +277,18 @@ def verserdonnees(triplets: list[GeneriqueTriplet], repo: pywikibot.DataSite, so
                     pass
 
                 else: #Aucune source du bon type, bon type mais pas bonne cible
-                    # print(f"Ajouter source: {trip.sujqid}, {trip.predquid}, {trip.objquid}")
+                    # print("Aucune source du bon type, bon type mais pas bonne cible")
                     ajout_source(declaration_existante, repo)
                     trip.referencee = True
                     
             else: #Déclaration non sourcée
-                # print(f"Ajouter source: {trip.sujqid}, {trip.predquid}, {trip.objquid}")
+                # print("Déclaration non sourcée")
                 ajout_source(declaration_existante, repo)
                 trip.referencee = True
         
         if trip.referencee == True:
             with open(rapport_chemin, "a") as outfile:
                 outfile.write(f"\n{trip.sujqid},{trip.predquid},{trip.objquid},{trip.ajoutee},{trip.referencee}")
-
-
-def creer_changelog(trips: list[GeneriqueTriplet]) -> pd.DataFrame:
-    changelog = pd.DataFrame()
-
-    for trip in trips:
-        outdf = pd.DataFrame(data=[{
-            "oeuvre": trip.sujqid,
-            "relation": trip.predquid,
-            "objet": trip.objquid,
-            "triplet_ajoute": trip.ajoutee,
-            "source_ajoutee": trip.referencee
-        }])
-
-        changelog = pd.concat([changelog, outdf])
-    
-    return changelog
-
-def creerrapport(df: pd.DataFrame, nom:str, timestr: str) -> None:
-    """Créer un rapport tabulaire dans le dossier `rapports`"""    
-    df.to_excel(RAPPORTCHEMIN / f"{nom}-{timestr}.xlsx", index=False)
 
 
 def supprimer_doublons(trips: list[GeneriqueTriplet]):

@@ -1,5 +1,4 @@
 #!/usr/local/bin/python3
-
 """
 Ce bot associe des oeuvres cinématographiques au Québec en tant que lieu de création.
 Le bot dépend d'un export de CinéTV, PRODS_QC, qui contient des oeuvres identifées comme
@@ -12,8 +11,9 @@ from pathlib import Path
 import argparse
 import pandas as pd
 import pywikibot
+import pydash
 
-timestr = time.strftime("%Y%m%d-%H%M%S")
+# timestr = time.strftime("%Y%m%d-%H%M%S")
 
 
 PRODS_QC = Path.cwd() / "cinetv_prodqc"
@@ -41,11 +41,9 @@ def main():
 
         ajoutdeclarations(qid, repo)
 
-        exit()
-        
+        exit()      
 
     qcproddf = chargerctv(PRODS_QC, args.fichier)
-
     qcproddf = nettoyerctv(qcproddf)
 
     wdt_cmtqId = chargerwdturi(MAPPING_FILMOID)
@@ -145,67 +143,68 @@ def ajout_source(decl: pywikibot.Claim, repo: pywikibot.DataSite) -> None:
     decl.addSource(ref, bot=True)
 
 def ajoutdeclarations(mapping: pd.DataFrame, repo: pywikibot.DataSite) -> None:
-    err_quids = []
-    modif_qids = []
+    timestr = time.strftime("%Y%m%d-%H%M%S")
 
-    rapportdf = pd.DataFrame()
+    rapport_chemin = f"rapports/prodqc_rapport-{timestr}.csv"
+
+    with open(rapport_chemin, "w", encoding="utf-8") as outfile:
+        outfile.write(f"qid,modification")   
 
     for idx, row in mapping.iterrows():
         changed = False
         qid = row["LienWikidata"]
-        # filmoid = row["FilmoId"]
 
-        try:
-            item = pywikibot.ItemPage(repo, qid)
+        item = pywikibot.ItemPage(repo, qid)
 
-            item_dict = item.get()  # Get the item dictionary
-            clm_dict = item_dict["claims"]  # Get the claim dictionary
+        item_dict = item.get()  # Get the item dictionary
+        clm_dict = item_dict["claims"]  # Get the claim dictionary
 
-            if "P495" in clm_dict: #Si l'URI a "pays d'origine" parmi ses déclarations
-                pays_cibles = [claim.getTarget().concept_uri() for claim in item.claims['P495']]
-                if CANADAURI in pays_cibles:
-                    for claim in item.claims['P495']: 
-                        if claim.getTarget().concept_uri() == CANADAURI:# and 'P131' not in claim.qualifiers:
-                            if 'P131' not in claim.qualifiers: #Si la déclaration n'a pas de qualification "localisation administrative"
-                                ajout_qualification(claim, repo)
-                                changed = True
-                            else: #TODO: revise to take source type and target into account
-                                try:
-                                    ajout_source(claim, repo)
-                                    changed = True
-                                except:
-                                    continue                                                       
-                else: #Oui "pays d'origine", mais cible != Canada
-                    ajout_declaration(item, repo)
-                    changed = True
+        if "P495" in clm_dict: #Si l'URI a "pays d'origine" parmi ses déclarations
+            canada_claims = [
+                claim
+                for claim in item.claims['P495']
+                if claim.getTarget().concept_uri() == CANADAURI
+            ]
 
-            else: #Aucune déclaration "pays d'origine"
+            if len(canada_claims) > 0:
+                for claim in canada_claims:
+                    if 'P131' not in claim.qualifiers: #Si la déclaration n'a pas de qualification "localisation administrative"
+                        ajout_qualification(claim, repo)
+                        changed = True
+
+                    else: #Oui qualif "localisation administrative"
+                        claimjson = claim.toJSON()
+
+                        qcquals = [
+                            qualif
+                            for qualif in pydash.get(claimjson, "qualifiers.P131")
+                            if "Q" + str(pydash.get(qualif, "datavalue.value.numeric-id")) == "Q176"
+                        ]
+
+                        if len(qcquals) == 0:
+                            ajout_qualification(claim, repo)
+                            changed = True
+
+                        else:
+                            continue
+
+                if len(canada_claims) > 1:
+                    print(f"Multiples 'pays d'origine', {qid}.")
+  
+
+            elif len(canada_claims) == 0: #Oui "pays d'origine", mais cible != Canada
                 ajout_declaration(item, repo)
                 changed = True
-    
-        except:
-            print(f"Erreur, qid {qid}")
-    
-        if changed == False:
-            err_quids.append(qid)
-            outdf = pd.DataFrame(data=[{
-                "qid": qid,
-                # "filmoid": filmoid,
-                "statut": "non modifié"
-            }])
-        elif changed == True:
-            modif_qids.append(qid)
-            outdf = pd.DataFrame(data=[{
-                "qid": qid,
-                # "filmoid": filmoid,
-                "statut": "modifié"
-            }])
-        rapportdf = pd.concat([rapportdf, outdf])
 
-    print(f"""{len(modif_qids)} oeuvres modifiées. 
-Qids non modifiés : {', '.join(err_quids)}""")
+        else: #Aucune déclaration "pays d'origine"
+            ajout_declaration(item, repo)
+            changed = True
 
-    rapportdf.to_excel(f"rapports/prodqc_rapport-{timestr}.xlsx", index=False)
+    
+        if changed == True:
+            with open(rapport_chemin, "a") as outfile:
+                outfile.write(f"\n{qid},{changed}")
+  
 
 
 if __name__ == "__main__":
