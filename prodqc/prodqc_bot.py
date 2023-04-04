@@ -108,6 +108,7 @@ def nettoyerctv(df: pd.DataFrame) -> pd.DataFrame:
 def chargerwdturi(chemin : Path) -> pd.DataFrame:
     #Charger le mapping FilmoID-WdtURI
     outdf = pd.read_csv(chemin)
+    outdf = outdf.astype({"FilmoId": "str"})
     outdf = outdf[outdf["FilmoId"].str.isnumeric()]
     outdf = outdf.astype({"FilmoId": "int64"})
 
@@ -151,6 +152,9 @@ def ajoutdeclarations(mapping: pd.DataFrame, repo: pywikibot.DataSite) -> None:
         outfile.write(f"qid,modification")   
 
     for idx, row in mapping.iterrows():
+        if (idx + 1) % 10 == 0:
+            print(f"{idx+1} triplets traités ({round(((idx+1)/len(mapping)*100))}%)")
+            
         changed = False
         qid = row["LienWikidata"]
 
@@ -175,7 +179,7 @@ def ajoutdeclarations(mapping: pd.DataFrame, repo: pywikibot.DataSite) -> None:
                     else: #Oui qualif "localisation administrative"
                         claimjson = claim.toJSON()
 
-                        qcquals = [
+                        qcquals = [ #qualifications où localisation admin == QC
                             qualif
                             for qualif in pydash.get(claimjson, "qualifiers.P131")
                             if "Q" + str(pydash.get(qualif, "datavalue.value.numeric-id")) == "Q176"

@@ -13,8 +13,26 @@ HEADERS = {
 def main():
     timestr = time.strftime("%Y%m%d-%H%M%S")
     exportpth = f'exports/personnes_donnees-{timestr}.csv'
+
+    #charger mapdict
+    mapdf = pd.read_csv("qid_map.csv")
+    mapdict = dict(zip(mapdf["qid"], mapdf["etiquette"]))
     
+    print("Récupération des données sur Wikidata")
     exportdf = importpersonnes()
+
+    print("Création du tableau d'export")
+    exportdf["isnis"] = exportdf["isnis"].apply(lambda x : x.split(", "))
+    exportdf["viafs"] = exportdf["viafs"].apply(lambda x : x.split(", "))
+    exportdf["banqids"] = exportdf["banqids"].apply(lambda x : x.split(", "))
+    exportdf["imdbids"] = exportdf["imdbids"].apply(lambda x : x.split(", "))
+    exportdf["genres"] = exportdf["genres"].apply(lambda x : x.split(", "))
+    exportdf["citoyens"] = exportdf["citoyens"].apply(lambda x : x.split(", "))
+    exportdf["naisses"] = exportdf["naisses"].apply(lambda x : x.split(", "))
+    exportdf["morts"] = exportdf["morts"].apply(lambda x : x.split(", "))
+
+    exportdf = exportdf.applymap(lambda x : dicttransform(x, mapdict))
+    exportdf = exportdf.applymap(cleanlists)
 
     exportdf.to_csv(exportpth, index=False)
     
@@ -54,15 +72,15 @@ def importpersonnes() -> pd.DataFrame:
     de la requête SPARQL qui décrit les personnes avec un identifiant de la CQ.
     """
     requete = """
-        SELECT DISTINCT ?LienWikidata ?PersID ?statutd
-            (GROUP_CONCAT(DISTINCT ?isni; SEPARATOR=",") AS ?isnis)
-            (GROUP_CONCAT(DISTINCT ?viaf; SEPARATOR=",") AS ?viafs)
-            (GROUP_CONCAT(DISTINCT ?banqid; SEPARATOR=",") AS ?banqids)
-            (GROUP_CONCAT(DISTINCT ?imdbid; SEPARATOR=",") AS ?imdbids)
-            (GROUP_CONCAT(DISTINCT ?genre; SEPARATOR=",") AS ?genres)
-            (GROUP_CONCAT(DISTINCT ?citoyen; SEPARATOR=",") AS ?citoyens)
-            (GROUP_CONCAT(DISTINCT ?naisse; SEPARATOR=",") AS ?naisses)
-            (GROUP_CONCAT(DISTINCT ?mort; SEPARATOR=",") AS ?morts)
+        SELECT DISTINCT ?LienWikidataLabel ?LienWikidata ?PersID ?statutd
+            (GROUP_CONCAT(DISTINCT ?isni; SEPARATOR=", ") AS ?isnis)
+            (GROUP_CONCAT(DISTINCT ?viaf; SEPARATOR=", ") AS ?viafs)
+            (GROUP_CONCAT(DISTINCT ?banqid; SEPARATOR=", ") AS ?banqids)
+            (GROUP_CONCAT(DISTINCT ?imdbid; SEPARATOR=", ") AS ?imdbids)
+            (GROUP_CONCAT(DISTINCT ?genre; SEPARATOR=", ") AS ?genres)
+            (GROUP_CONCAT(DISTINCT ?citoyen; SEPARATOR=", ") AS ?citoyens)
+            (GROUP_CONCAT(DISTINCT ?naisse; SEPARATOR=", ") AS ?naisses)
+            (GROUP_CONCAT(DISTINCT ?mort; SEPARATOR=", ") AS ?morts)
         WHERE {
             ?LienWikidata wdt:P8971 ?PersID;
                 wdt:P31 wd:Q5.
@@ -75,21 +93,31 @@ def importpersonnes() -> pd.DataFrame:
             OPTIONAL {?LienWikidata wdt:P27 ?citoyen .}
             OPTIONAL {?LienWikidata wdt:P569 ?naisse .}
             OPTIONAL {?LienWikidata wdt:P570 ?mort .}
+            SERVICE wikibase:label { bd:serviceParam wikibase:language "fr,en". }
         }
-        GROUP BY ?LienWikidata ?PersID ?statutd
+        GROUP BY ?LienWikidata ?LienWikidataLabel ?PersID ?statutd
         ORDER BY ?LienWikidata
     """
 
     return pull_clean(requete)
 
-def uritraitement():
-    """
-    Cette fonction remplace les URIs des données Wikidata 
-    avec des equivalents lisibles par humain
-    """
-    ...
+def dicttransform(cell: str | list, refdict: dict) -> str | list:
+    if isinstance(cell, list):
+        return [
+            refdict.get(item, item)
+            for item in cell
+        ]
 
+    else:
+        return refdict.get(cell, cell)
 
+    
+def cleanlists(cell):
+    if isinstance(cell, list) and len(cell) == 1 and cell[0] == "":
+        return None
+
+    else:
+        return cell
 
 
 if __name__ == "__main__":
