@@ -4,15 +4,16 @@ Ajouter des déclarations à des oeuvres cinématographiques sur Wikidata.
 """
 
 import time
-from pathlib import Path
 import argparse
-import pandas as pd
 import pywikibot
 import re
 import pydash
 import requests
+import logging
 
-RAPPORTCHEMIN = Path.cwd() / "rapports"
+import pandas as pd
+
+from pathlib import Path
 
 CTVCHEMIN = Path.cwd() / "donnees"
 MAPPING_FILMOID = Path("../mapping/oeuvres-wdtmapping.csv")
@@ -69,9 +70,6 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    if not RAPPORTCHEMIN.exists():
-        RAPPORTCHEMIN.mkdir()
-
     gendict = pd.read_csv(FONCTION_MAP)
     gendict = dict(zip(gendict["FonctionID"], gendict["WdtID"]))
 
@@ -80,7 +78,6 @@ def main() -> None:
 
     generique_cmtq = pd.read_csv(source_chemin, sep=";")
     generique_cmtq = nettoyerctv(generique_cmtq, gendict)
-
 
     #Associer FilmoID et Wikidata URI
     oeuvres_wdt = chargerwdturi(MAPPING_FILMOID)
@@ -99,11 +96,6 @@ def main() -> None:
     generique_cmtq["persQid"] = generique_cmtq["persQid"].apply(simplifierQid)
     generique_cmtq["OeuvreQid"] = generique_cmtq["OeuvreQid"].apply(simplifierQid)
 
-    # TODO: option, créer ce rapport
-    # creerrapport(generique_cmtq, "test", timestr)
-
-    # exit()
-
     repo = creerrepo()
 
     if args.qid:
@@ -111,27 +103,95 @@ def main() -> None:
 
         triplets = creertriplets(generique_cmtq, repo)
 
-        print(len(triplets))
+        # print(len(triplets))
 
-        verserdonnees(triplets, repo, args.source)
+        # verserdonnees(triplets, repo, args.source)
 
-        supprimer_doublons(triplets)
+        # supprimer_doublons(triplets)
 
-        exit()
+        # exit()
+    else:
+        if args.limite: #Limiter le nombre d'URIs à modifier
+            generique_cmtq = generique_cmtq.head(args.limite) 
 
-    if args.limite: #Limiter le nombre d'URIs à modifier
-        generique_cmtq = generique_cmtq.head(args.limite) 
+        triplets = creertriplets(generique_cmtq, repo)
 
-    triplets = creertriplets(generique_cmtq, repo)
-    
     start = input(f"Ce script créera un maximum de {len(triplets)} déclarations sur Wikidata. Continuer? [o]ui/[N]on? ")
+
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
+    logfolder = Path("logs")
+    if not logfolder.exists():
+        logfolder.mkdir()
+    logging.basicConfig(
+        filename=(logfolder / f'wdt_generique-{timestamp}.log'),
+        format="%(asctime)s; %(levelname)s; %(message)s",
+        encoding='utf-8', 
+        level=logging.INFO)
 
     if not start.lower().startswith("o"):
         exit()
 
-    verserdonnees(triplets, repo, args.source)
+    # timestr = time.strftime("%Y%m%d-%H%M%S")
+    # source = Path(source).stem
 
-    supprimer_doublons(triplets)
+    # rapport_chemin = RAPPORTCHEMIN / f"generique_modifications-{source}-{timestr}.csv"
+
+    # with open(rapport_chemin, "w", encoding="utf-8") as outfile:
+    #     outfile.write(f"oeuvre,relation,objet,triplet_ajoute,source_ajoutee")
+
+    for idx, trip in enumerate(triplets):
+        if (idx + 1) % 10 == 0:
+            print(f"{idx+1} triplets traités ({round(((idx+1)/len(triplets)*100))}%)")
+        
+        est_animation = animation_bool(trip)
+        if est_animation and trip.predquid == "P161":
+            trip.predquid = "P725"       
+
+        declaration_existante = trip.declaration_existante()
+        if not declaration_existante: #Bon prédicat absent; bon prédicat présent mais pas le bon objet
+            try:
+                ajout_declaration(trip.item, trip.predquid, trip.objquid, repo)
+                trip.ajoutee = True
+                trip.referencee = True
+                logging.info(f"succès ajout déclaration; {trip.sujqid}, {trip.predquid}, {trip.objquid}")
+            except:
+                logging.error(f"échec ajout déclaration; {trip.sujqid}, {trip.predquid}, {trip.objquid}")
+
+        else: #Prédicat avec bon objet existe déjà
+            declaration_json = declaration_existante.toJSON()
+            references = declaration_json.get("references", None)
+
+            if references: #Déclaration sourcée
+                reference_cibles = list()
+
+                for reference in references:
+                    sources_affirme_dans = pydash.get(reference, "snaks.P248", None)
+
+                    if sources_affirme_dans:
+                        for cible in sources_affirme_dans:
+                            reference_cibles.append("Q" + str(pydash.get(cible, "datavalue.value.numeric-id", None)))
+    
+                if "Q41001657" in reference_cibles: #CinéTV déjà cité comme référence
+                    continue
+                    # logging.info(f"déclaration déjà documentée; {trip.sujqid}, {trip.predquid}, {trip.objquid}")
+
+                else: #Aucune source du bon type, bon type mais pas bonne cible
+                    try:
+                        ajout_source(declaration_existante, repo)
+                        trip.referencee = True
+                        logging.info(f"succès ajout référence; {trip.sujqid}, {trip.predquid}, {trip.objquid}")
+                    except:
+                        logging.error(f"échec ajout référence; {trip.sujqid}, {trip.predquid}, {trip.objquid}")
+                    
+            else: #Déclaration non sourcée
+                try:
+                    ajout_source(declaration_existante, repo)
+                    trip.referencee = True
+                    logging.info(f"succès ajout référence; {trip.sujqid}, {trip.predquid}, {trip.objquid}")
+                except:
+                    logging.error(f"échec ajout référence; {trip.sujqid}, {trip.predquid}, {trip.objquid}")
+        
+    # supprimer_doublons(triplets)
 
 def nettoyerctv(df:pd.DataFrame, gendict: dict) -> pd.DataFrame:
     """Éliminer les lignes suplerflues, renommer des colonnes"""
@@ -231,64 +291,64 @@ def animation_bool(trip: GeneriqueTriplet):
 
     return False if dataframe.empty else True
 
-def verserdonnees(triplets: list[GeneriqueTriplet], repo: pywikibot.DataSite, source: str) -> None:
-    timestr = time.strftime("%Y%m%d-%H%M%S")
-    source = Path(source).stem
+# def verserdonnees(triplets: list[GeneriqueTriplet], repo: pywikibot.DataSite, source: str) -> None:
+#     timestr = time.strftime("%Y%m%d-%H%M%S")
+#     source = Path(source).stem
 
-    rapport_chemin = RAPPORTCHEMIN / f"generique_modifications-{source}-{timestr}.csv"
+#     rapport_chemin = RAPPORTCHEMIN / f"generique_modifications-{source}-{timestr}.csv"
 
-    with open(rapport_chemin, "w", encoding="utf-8") as outfile:
-        outfile.write(f"oeuvre,relation,objet,triplet_ajoute,source_ajoutee")
+#     with open(rapport_chemin, "w", encoding="utf-8") as outfile:
+#         outfile.write(f"oeuvre,relation,objet,triplet_ajoute,source_ajoutee")
 
-    for idx, trip in enumerate(triplets):
-        if (idx + 1) % 10 == 0:
-            print(f"{idx+1} triplets traités ({round(((idx+1)/len(triplets)*100))}%)")
+#     for idx, trip in enumerate(triplets):
+#         if (idx + 1) % 10 == 0:
+#             print(f"{idx+1} triplets traités ({round(((idx+1)/len(triplets)*100))}%)")
         
-        est_animation = animation_bool(trip)
-        if est_animation and trip.predquid == "P161":
-            trip.predquid = "P725"
+#         est_animation = animation_bool(trip)
+#         if est_animation and trip.predquid == "P161":
+#             trip.predquid = "P725"
 
-        declaration_existante = trip.declaration_existante()
+#         declaration_existante = trip.declaration_existante()
 
-        # print(trip.sujqid, trip.predquid, trip.objquid)
+#         # print(trip.sujqid, trip.predquid, trip.objquid)
 
-        if not declaration_existante: #Bon prédicat absent; bon prédicat présent mais pas le bon objet
-            ajout_declaration(trip.item, trip.predquid, trip.objquid, repo)
-            # print("Bon prédicat absent; bon prédicat présent mais pas le bon objet")
-            trip.ajoutee = True
-            trip.referencee = True
+#         if not declaration_existante: #Bon prédicat absent; bon prédicat présent mais pas le bon objet
+#             ajout_declaration(trip.item, trip.predquid, trip.objquid, repo)
+#             # print("Bon prédicat absent; bon prédicat présent mais pas le bon objet")
+#             trip.ajoutee = True
+#             trip.referencee = True
 
-        else: #Prédicat avec bon objet existe déjà
-            declaration_json = declaration_existante.toJSON()
-            references = declaration_json.get("references", None)
+#         else: #Prédicat avec bon objet existe déjà
+#             declaration_json = declaration_existante.toJSON()
+#             references = declaration_json.get("references", None)
 
-            if references: #Déclaration sourcée
-                reference_cibles = list()
+#             if references: #Déclaration sourcée
+#                 reference_cibles = list()
 
-                for reference in references:
-                    sources_affirme_dans = pydash.get(reference, "snaks.P248", None)
+#                 for reference in references:
+#                     sources_affirme_dans = pydash.get(reference, "snaks.P248", None)
 
-                    if sources_affirme_dans:
-                        for cible in sources_affirme_dans:
-                            reference_cibles.append("Q" + str(pydash.get(cible, "datavalue.value.numeric-id", None)))
+#                     if sources_affirme_dans:
+#                         for cible in sources_affirme_dans:
+#                             reference_cibles.append("Q" + str(pydash.get(cible, "datavalue.value.numeric-id", None)))
     
-                if "Q41001657" in reference_cibles:
-                    # print("Rien ajouté")
-                    pass
+#                 if "Q41001657" in reference_cibles:
+#                     # print("Rien ajouté")
+#                     pass
 
-                else: #Aucune source du bon type, bon type mais pas bonne cible
-                    # print("Aucune source du bon type, bon type mais pas bonne cible")
-                    ajout_source(declaration_existante, repo)
-                    trip.referencee = True
+#                 else: #Aucune source du bon type, bon type mais pas bonne cible
+#                     # print("Aucune source du bon type, bon type mais pas bonne cible")
+#                     ajout_source(declaration_existante, repo)
+#                     trip.referencee = True
                     
-            else: #Déclaration non sourcée
-                # print("Déclaration non sourcée")
-                ajout_source(declaration_existante, repo)
-                trip.referencee = True
+#             else: #Déclaration non sourcée
+#                 # print("Déclaration non sourcée")
+#                 ajout_source(declaration_existante, repo)
+#                 trip.referencee = True
         
-        if trip.referencee == True:
-            with open(rapport_chemin, "a") as outfile:
-                outfile.write(f"\n{trip.sujqid},{trip.predquid},{trip.objquid},{trip.ajoutee},{trip.referencee}")
+#         if trip.referencee == True:
+#             with open(rapport_chemin, "a") as outfile:
+#                 outfile.write(f"\n{trip.sujqid},{trip.predquid},{trip.objquid},{trip.ajoutee},{trip.referencee}")
 
 
 def supprimer_doublons(trips: list[GeneriqueTriplet]):

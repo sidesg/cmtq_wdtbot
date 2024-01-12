@@ -5,7 +5,7 @@
 *.DS_Store
 *.json
 *.txt
-*.code-workspace
+*.log
 
 __pycache__
 apicache-py3
