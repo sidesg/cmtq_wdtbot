@@ -61,7 +61,6 @@ class GeneriqueTriplet:
 
 
 def main() -> None:
-    # timestr = time.strftime("%Y%m%d-%H%M%S")
     parser = argparse.ArgumentParser()
 
     parser.add_argument("source", help="Nom du fichier source dans /donnees", type=str)
@@ -103,13 +102,6 @@ def main() -> None:
 
         triplets = creertriplets(generique_cmtq, repo)
 
-        # print(len(triplets))
-
-        # verserdonnees(triplets, repo, args.source)
-
-        # supprimer_doublons(triplets)
-
-        # exit()
     else:
         if args.limite: #Limiter le nombre d'URIs à modifier
             generique_cmtq = generique_cmtq.head(args.limite) 
@@ -117,6 +109,8 @@ def main() -> None:
         triplets = creertriplets(generique_cmtq, repo)
 
     start = input(f"Ce script créera un maximum de {len(triplets)} déclarations sur Wikidata. Continuer? [o]ui/[N]on? ")
+    if not start.lower().startswith("o"):
+        exit()
 
     timestamp = time.strftime("%Y%m%d-%H%M%S")
     logfolder = Path("logs")
@@ -128,17 +122,7 @@ def main() -> None:
         encoding='utf-8', 
         level=logging.INFO)
 
-    if not start.lower().startswith("o"):
-        exit()
-
-    # timestr = time.strftime("%Y%m%d-%H%M%S")
-    # source = Path(source).stem
-
-    # rapport_chemin = RAPPORTCHEMIN / f"generique_modifications-{source}-{timestr}.csv"
-
-    # with open(rapport_chemin, "w", encoding="utf-8") as outfile:
-    #     outfile.write(f"oeuvre,relation,objet,triplet_ajoute,source_ajoutee")
-
+    # Versement des triplets
     for idx, trip in enumerate(triplets):
         if (idx + 1) % 10 == 0:
             print(f"{idx+1} triplets traités ({round(((idx+1)/len(triplets)*100))}%)")
@@ -148,6 +132,7 @@ def main() -> None:
             trip.predquid = "P725"       
 
         declaration_existante = trip.declaration_existante()
+
         if not declaration_existante: #Bon prédicat absent; bon prédicat présent mais pas le bon objet
             try:
                 ajout_declaration(trip.item, trip.predquid, trip.objquid, repo)
@@ -171,9 +156,10 @@ def main() -> None:
                         for cible in sources_affirme_dans:
                             reference_cibles.append("Q" + str(pydash.get(cible, "datavalue.value.numeric-id", None)))
     
+                # print(reference_cibles)
                 if "Q41001657" in reference_cibles: #CinéTV déjà cité comme référence
-                    continue
-                    # logging.info(f"déclaration déjà documentée; {trip.sujqid}, {trip.predquid}, {trip.objquid}")
+                    # continue
+                    logging.info(f"déclaration déjà documentée; {trip.sujqid}, {trip.predquid}, {trip.objquid}")
 
                 else: #Aucune source du bon type, bon type mais pas bonne cible
                     try:
@@ -266,9 +252,10 @@ def animation_bool(trip: GeneriqueTriplet):
     }
     
     sparql =f"""
-    SELECT *
+    SELECT ?oeuvre
     WHERE {{
-        ?oeuvre wdt:P31/wdt:P279* wd:Q202866.
+        VALUES (?type) {{(wd:Q202866) (wd:Q581714)}}
+        ?oeuvre wdt:P31/wdt:P279* ?type.
         BIND (wd:{trip.sujqid} AS ?oeuvre)
     }}
     """
@@ -290,66 +277,6 @@ def animation_bool(trip: GeneriqueTriplet):
         dataframe[k] = dataframe.apply(extract_value, col=k, axis=1)
 
     return False if dataframe.empty else True
-
-# def verserdonnees(triplets: list[GeneriqueTriplet], repo: pywikibot.DataSite, source: str) -> None:
-#     timestr = time.strftime("%Y%m%d-%H%M%S")
-#     source = Path(source).stem
-
-#     rapport_chemin = RAPPORTCHEMIN / f"generique_modifications-{source}-{timestr}.csv"
-
-#     with open(rapport_chemin, "w", encoding="utf-8") as outfile:
-#         outfile.write(f"oeuvre,relation,objet,triplet_ajoute,source_ajoutee")
-
-#     for idx, trip in enumerate(triplets):
-#         if (idx + 1) % 10 == 0:
-#             print(f"{idx+1} triplets traités ({round(((idx+1)/len(triplets)*100))}%)")
-        
-#         est_animation = animation_bool(trip)
-#         if est_animation and trip.predquid == "P161":
-#             trip.predquid = "P725"
-
-#         declaration_existante = trip.declaration_existante()
-
-#         # print(trip.sujqid, trip.predquid, trip.objquid)
-
-#         if not declaration_existante: #Bon prédicat absent; bon prédicat présent mais pas le bon objet
-#             ajout_declaration(trip.item, trip.predquid, trip.objquid, repo)
-#             # print("Bon prédicat absent; bon prédicat présent mais pas le bon objet")
-#             trip.ajoutee = True
-#             trip.referencee = True
-
-#         else: #Prédicat avec bon objet existe déjà
-#             declaration_json = declaration_existante.toJSON()
-#             references = declaration_json.get("references", None)
-
-#             if references: #Déclaration sourcée
-#                 reference_cibles = list()
-
-#                 for reference in references:
-#                     sources_affirme_dans = pydash.get(reference, "snaks.P248", None)
-
-#                     if sources_affirme_dans:
-#                         for cible in sources_affirme_dans:
-#                             reference_cibles.append("Q" + str(pydash.get(cible, "datavalue.value.numeric-id", None)))
-    
-#                 if "Q41001657" in reference_cibles:
-#                     # print("Rien ajouté")
-#                     pass
-
-#                 else: #Aucune source du bon type, bon type mais pas bonne cible
-#                     # print("Aucune source du bon type, bon type mais pas bonne cible")
-#                     ajout_source(declaration_existante, repo)
-#                     trip.referencee = True
-                    
-#             else: #Déclaration non sourcée
-#                 # print("Déclaration non sourcée")
-#                 ajout_source(declaration_existante, repo)
-#                 trip.referencee = True
-        
-#         if trip.referencee == True:
-#             with open(rapport_chemin, "a") as outfile:
-#                 outfile.write(f"\n{trip.sujqid},{trip.predquid},{trip.objquid},{trip.ajoutee},{trip.referencee}")
-
 
 def supprimer_doublons(trips: list[GeneriqueTriplet]):
     """Supprimer des déclarations doublons du type P3092, membre de l'équipe du film, ou P161, distribution."""
